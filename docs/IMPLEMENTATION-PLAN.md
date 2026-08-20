@@ -68,9 +68,12 @@ composition root exists and is the only place concretes are constructed.
 - [ ] **M0.6 — Extension scaffold.** Deferred to **M6.7**, where it is built alongside
       `ExtensionEmailSurface`. There is nothing for it to drive until the funnel and action
       dispatcher exist.
-- [x] **M0.7 — CI.** Contract-drift guard + tests + cockpit typecheck/build on push, plus a
-      standing secret-scan job (no committed key patterns, `.env` untracked, and `frontend/` may
-      reference exactly one `NEXT_PUBLIC_*` variable).
+- [x] **M0.7 — Verification gate.** `pnpm run verify` = contract-drift guard → security guards →
+      lint → tests → cockpit typecheck. **Run it before every commit.**
+      `scripts/guards.py` enforces: no provider-key pattern in any file git would track, `.env`
+      untracked, and `frontend/` referencing exactly one `NEXT_PUBLIC_*` variable.
+      *Hosted CI is deliberately not wired up yet* — the gate runs locally and the same commands
+      drop into a workflow unchanged whenever the repo gets a remote.
 
 **Acceptance** *(met)*
 - ✅ `pnpm run setup` completes on a clean machine (uv fetches Python 3.12; Chromium is a separate
@@ -115,32 +118,72 @@ becoming a tokenized `Observation`.
   - *Test:* provider 1 returns 429 → provider 2 is called, same messages, once.
   - *Test:* a retry uses the same model; a fallback uses the next provider.
   - *Test:* all providers exhausted → `PROVIDER_EXHAUSTED`, not an unhandled exception.
-- [ ] **M1.2 — Provider adapters.** `GroqClient`, `OpenRouterClient`, `GeminiClient`, all
+- [x] **M1.2 — Provider adapters.** `GroqClient`, `OpenRouterClient`, `GeminiClient`, all
       OpenAI-compatible behind the port. Model slugs from settings, per role.
   - *Test:* no model ID string appears anywhere outside settings (a grep-based test).
-- [ ] **M1.3 — Metering.** `UsageTracker` → `StepRecord{provider, role, input_tokens,
+- [x] **M1.3 — Metering.** `UsageTracker` → `StepRecord{provider, role, input_tokens,
       output_tokens, latency_ms}` on **every** call, including classifier and validator roles.
-- [ ] **M1.4 — `PiiVault` + `PiiTokenizer`.** Deterministic tokenization of addresses, phones, and
+- [x] **M1.4 — `PiiVault` + `PiiTokenizer`.** Deterministic tokenization of addresses, phones, and
       identifiers; best-effort names. Stable within a session, never reused across sessions,
       in-memory only.
   - *Test:* stability (same input → same token within a run), isolation (new session → new
     numbering), completeness on the deterministic classes.
   - *Test:* `resolve()` on an unknown token raises rather than returning a passthrough.
-- [ ] **M1.5 — Redaction filters.** Install on the logger, the trajectory writer, the event emitter,
+- [x] **M1.5 — Redaction filters.** Install on the logger, the trajectory writer, the event emitter,
       and error-reason construction — all eight egress points in
       [`SECURITY-MODEL.md §2.4`](SECURITY-MODEL.md).
-- [ ] **M1.6 — Funnel stages.** `Extract`, `VisibilityFilter`, `OcclusionCuller`,
+> **M1 progress: gateway and security done (M1.1–M1.5). The funnel is next (M1.6–M1.8).**
+>
+> **What the live smoke test caught that mocks could not.** Two real bugs, both invisible to a
+> hermetic suite, both found by exactly one call per provider:
+>
+> 1. **The model roster rotated out from under the config.** `llama-3.3-70b-versatile` and
+>    `llama-3.1-8b-instant` no longer exist on the account; the whole Llama family is gone. This is
+>    [ADR-008](ADR.md#adr-008)'s "never hardcode a slug" rule proving itself inside the project's own
+>    first week. Defaults moved to `openai/gpt-oss-120b` / `openai/gpt-oss-20b`, and `.env.example`
+>    now carries the one-liner for listing what a key can actually reach. Note the failure classified
+>    **correctly**: a 404 became `ProviderBadRequest`, which does *not* fall through — so the chain
+>    did not waste OpenRouter and Gemini on the same bad slug.
+> 2. **Reasoning models return no `content` at all.** On a tool-calling turn, `gpt-oss` puts its
+>    chain of thought in `message.reasoning` and leaves `content` empty — 99 output tokens billed,
+>    empty text parsed. Reading only `content` would have failed think-before-act on **every turn**
+>    (`REASONING_MISSING`) while showing the cockpit nothing, and the cause would have looked like a
+>    model problem rather than a parsing one. `LLMResult` now carries `text` *and* `reasoning`, and
+>    `explanation` prefers the latter. Covered hermetically for both `reasoning` and
+>    `reasoning_content` spellings, so it cannot regress without a live key.
+
+- [x] **M1.6 — Funnel stages.** `Extract`, `VisibilityFilter`, `OcclusionCuller`,
       `WrapperCollapser`, `PiiTokenizer`, `SoMIndexer`, `ReadingOrderFormatter` — one class each,
       composed into `run_funnel()`.
   - *Test:* each stage in isolation against synthetic snapshot fixtures.
   - *Test:* **stage ordering** — the tokenizer runs before the indexer and formatter. Reordering the
     pipeline must fail a test, because that reordering is a security regression.
   - *Test:* the budget path reports `droppedCount` and never truncates silently.
-- [ ] **M1.7 — `PlaywrightEmailSurface`.** `EmailSurface` port over Playwright + raw CDP; headful +
+- [x] **M1.7 — `PlaywrightEmailSurface`.** `EmailSurface` port over Playwright + raw CDP; headful +
       stealth; `observe()` runs the funnel, `act()` resolves index and token then dispatches trusted
       `Input.*`.
-- [ ] **M1.8 — Gmail fixtures.** Recorded-DOM fixtures for inbox, thread, and compose views. These
+- [x] **M1.8 — Gmail fixtures.** Recorded-DOM fixtures for inbox, thread, and compose views. These
       are what CI runs against; no live account in CI.
+
+> **M1 complete.** 234 hermetic tests + 17 browser tests + 2 live provider calls.
+>
+> **What the browser found that synthetic fixtures could not.** I built precise hit-testing
+> into the extractor (`elementFromPoint` — "would a click here actually reach you?") and then
+> had the occlusion stage ignore it and re-derive coverage *geometrically*. Against a real
+> open dialog that gets the answer exactly backwards: the blocking layer is a full-viewport
+> overlay, which my own backdrop heuristic **exempts** from being an occluder, so every row
+> behind the dialog stayed listed and clickable. Geometry cannot distinguish a transparent
+> scrim from a real cover. The stage now believes the browser when it has an answer and
+> falls back to geometry only for elements whose centre is off-screen and cannot be tested.
+>
+> **Environment note.** `playwright install` **exits 0 even when the download fails**, so a
+> missing browser surfaces much later as an unrelated "executable doesn't exist". Here it
+> failed because the machine had ~0.1 GB free. `resolve_chromium()` now finds the newest
+> build already on disk (`PLAYWRIGHT_CHROMIUM_PATH` overrides), which is why the browser
+> suite runs at all on this machine; the integration tests skip cleanly when none is found.
+>
+> **Still open:** the fixture covers inbox + compose. A **thread view** fixture is needed
+> before the reply and calendar flows (M4/M6).
 
 **Acceptance**
 - A Gmail fixture page becomes an `Observation` of ~1–3k tokens with a numbered element list.
@@ -157,25 +200,25 @@ from the LLM.
 
 ### Tasks
 
-- [ ] **M2.1 — `AgentState`.** Pydantic model per [`SYSTEM-DESIGN.md §4`](SYSTEM-DESIGN.md), append
+- [x] **M2.1 — `AgentState`.** Pydantic model per [`SYSTEM-DESIGN.md §4`](SYSTEM-DESIGN.md), append
       reducers on `messages` and `history`.
   - *Test:* checkpoint serde round-trip including `ErrorCode` **inside** a `StepRecord`. Custom types
     nested in checkpointed state are the classic silent-drop bug: the checkpoint of a *failed* run
     quietly loses its error code, so the failure path is exactly where the gap hides.
-- [ ] **M2.2 — `intake`.** NL → `TaskIntent` via the classifier role. No side effects.
-- [ ] **M2.3 — Slot registry.** The table in [`SYSTEM-DESIGN.md §5.1`](SYSTEM-DESIGN.md) as data, not
+- [x] **M2.2 — `intake`.** NL → `TaskIntent` via the classifier role. No side effects.
+- [x] **M2.3 — Slot registry.** The table in [`SYSTEM-DESIGN.md §5.1`](SYSTEM-DESIGN.md) as data, not
       prompt text.
-- [ ] **M2.4 — `context_gate`.** Compute `missing_slots` + confidence; `AskUser` interrupt; loop
+- [x] **M2.4 — `context_gate`.** Compute `missing_slots` + confidence; `AskUser` interrupt; loop
       until confidence ≥ τ. Read-only observation permitted for disambiguation.
   - *Test:* `test_context_gate_blocks_dispatch` — no worker runs while slots are missing.
   - *Test:* a durable pause survives a rebuilt graph (resume from the checkpoint, not from memory).
   - *Test:* disambiguation performs **zero** mutating actions.
-- [ ] **M2.5 — `router`.** Rule pre-check first (zero LLM calls on a match), classifier otherwise.
+- [x] **M2.5 — `router`.** Rule pre-check first (zero LLM calls on a match), classifier otherwise.
       Typed `Route`. Escalation valve from linear → decision.
-- [ ] **M2.6 — `planner`.** Decision route only; posts `Plan(steps)`.
-- [ ] **M2.7 — Routing functions.** All six pure functions from
+- [x] **M2.6 — `planner`.** Decision route only; posts `Plan(steps)`.
+- [x] **M2.7 — Routing functions.** All six pure functions from
       [`SYSTEM-DESIGN.md §3.2`](SYSTEM-DESIGN.md), **every branch** covered.
-- [ ] **M2.8 — Graph assembly + checkpointer.** `InMemorySaver` in dev with the allowed-modules serde
+- [x] **M2.8 — Graph assembly + checkpointer.** `InMemorySaver` in dev with the allowed-modules serde
       configured; SQLite behind a setting.
 
 **Acceptance**

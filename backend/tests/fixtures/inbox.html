@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Inbox (4)</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; }
+    header { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #ddd; }
+    .row { display: flex; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #eee; }
+    .sender { width: 180px; font-weight: 600; }
+    .subject { flex: 1; }
+    .hidden-row { display: none; }
+    .spacer { height: 1400px; }
+    #overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      display: none; align-items: center; justify-content: center;
+    }
+    #overlay.open { display: flex; }
+    #compose {
+      background: #fff; width: 520px; padding: 16px; border-radius: 12px;
+    }
+    #compose input, #compose textarea { width: 100%; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <button id="compose-btn" onclick="openCompose()">Compose</button>
+    <button id="refresh">Refresh</button>
+    <input id="search" placeholder="Search mail" />
+  </header>
+
+  <main>
+    <!-- Wrapper chain: the funnel must fold these into the row, not list four copies. -->
+    <div class="wrap"><div class="wrap2">
+      <div class="row" tabindex="0" id="row-1">
+        <span class="sender" email="priya.nair@corp.com" name="Priya Nair">Priya Nair</span>
+        <span class="subject">Friday demo moved to 4pm — can you make it?</span>
+      </div>
+    </div></div>
+
+    <div class="row" tabindex="0" id="row-2">
+      <span class="sender" email="dev.kapoor@corp.com" name="Dev Kapoor">Dev Kapoor</span>
+      <span class="subject">Q3 numbers — call me on +91 98765 43210</span>
+    </div>
+
+    <div class="row" tabindex="0" id="row-3">
+      <span class="sender" email="offers@shop.example" name="Shop Weekly">Shop Weekly</span>
+      <span class="subject">Your weekly newsletter is here</span>
+    </div>
+
+    <!-- Never rendered: must be counted as hidden, not as reachable. -->
+    <div class="row hidden-row" id="row-hidden">
+      <span class="sender" email="secret@corp.com" name="Hidden Sender">Hidden Sender</span>
+      <span class="subject">This row is display:none</span>
+    </div>
+
+    <!-- Pushes the last row below the fold: reachable by scrolling, so it must be COUNTED. -->
+    <div class="spacer"></div>
+
+    <div class="row" tabindex="0" id="row-4">
+      <span class="sender" email="ops@corp.example" name="Ops Team">Ops Team</span>
+      <span class="subject">Older thread far below the fold</span>
+    </div>
+  </main>
+
+  <div id="overlay">
+    <div id="compose" role="dialog" aria-label="New message">
+      <input id="to" name="to" placeholder="Recipients" />
+      <input id="subject" name="subjectbox" placeholder="Subject" />
+      <textarea id="body" placeholder="Message body"></textarea>
+      <button id="send">Send</button>
+    </div>
+  </div>
+
+  <script>
+    function openCompose() { document.getElementById('overlay').classList.add('open'); }
+  </script>
+</body>
+</html>

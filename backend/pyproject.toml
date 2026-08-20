@@ -9,6 +9,9 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "httpx>=0.28.1",
+    "playwright>=1.62.0",
+    "langgraph>=1.2.11",
 ]
 
 [dependency-groups]
@@ -32,6 +35,13 @@ packages = ["app"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 filterwarnings = ["error::DeprecationWarning"]
+# `live` tests reach a real provider. Excluded from the default run so the gate stays
+# hermetic, fast, and free; opt in with `-m live`.
+addopts = "-m 'not live and not browser'"
+markers = [
+    "live: reaches a real LLM provider; requires a key and is excluded by default",
+    "browser: launches a real Chromium against a LOCAL fixture; excluded by default for speed",
+]
 
 [tool.ruff]
 line-length = 100

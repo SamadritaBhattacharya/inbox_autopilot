@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -73,6 +74,8 @@ class FallbackLLMClient:
         *,
         max_retries: int = 2,
         sleep: SleepFn | None = None,
+        on_attempt: Callable[[Attempt], None] | None = None,
+        recent_window: int = 100,
     ) -> None:
         if not providers:
             # Failing at wiring time beats failing on the first real turn, when a user is
@@ -82,8 +85,12 @@ class FallbackLLMClient:
         self._max_retries = max_retries
         # Injected so tests assert on backoff without spending real time.
         self._sleep: SleepFn = sleep or asyncio.sleep
-        #: Every attempt this client has made, in order. Read by the metering layer.
-        self.attempts: list[Attempt] = []
+        # Metering is pushed, not polled: this client is long-lived and shared, so it must
+        # not accumulate a run's history. The callback hands each attempt to whoever owns
+        # step context (a graph node knows the step number; this client never will).
+        self._on_attempt = on_attempt
+        #: A bounded recent window, for debugging and tests only — NOT the metering record.
+        self.attempts: deque[Attempt] = deque(maxlen=recent_window)
 
     async def complete(
         self,
@@ -164,13 +171,19 @@ class FallbackLLMClient:
         usage: Usage | None = None,
         error: str | None = None,
     ) -> None:
-        self.attempts.append(
-            Attempt(
-                provider=provider or "unknown",
-                role=role,
-                ok=ok,
-                usage=usage or Usage(),
-                latency_ms=int((time.monotonic() - started) * 1000),
-                error=error,
-            )
+        attempt = Attempt(
+            provider=provider or "unknown",
+            role=role,
+            ok=ok,
+            usage=usage or Usage(),
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error=error,
         )
+        self.attempts.append(attempt)
+        if self._on_attempt is not None:
+            try:
+                self._on_attempt(attempt)
+            except Exception:
+                # Metering must never take down a run. Losing a usage row is a reporting
+                # gap; raising here would turn it into a failed task.
+                logger.exception("on_attempt callback failed for provider %s", attempt.provider)

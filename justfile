@@ -27,6 +27,14 @@ gen-contracts:
 check: gen-contracts
     git diff --exit-code -- packages/contracts/schema packages/contracts/src/generated
 
+# Security guards: no committed keys, .env untracked, one public env var in the cockpit.
+guards:
+    uv run --project backend python scripts/guards.py
+
+# The full local gate. Run this before every commit — it is what CI would run.
+verify: check guards lint test
+    pnpm -C frontend typecheck
+
 # All tests: backend + contracts (pytest) then the JS workspace (vitest).
 test:
     uv run --project backend pytest -q backend/tests packages/contracts/tests

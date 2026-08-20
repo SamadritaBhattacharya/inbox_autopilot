@@ -29,9 +29,14 @@ class Settings(BaseSettings):
 
     # Model per role: a small classifier for high-volume/low-difficulty work, a large
     # executor for actual judgment, a small validator for binary checks.
-    llm_model_classifier: str = "llama-3.1-8b-instant"
-    llm_model_executor: str = "llama-3.3-70b-versatile"
-    llm_model_validator: str = "llama-3.1-8b-instant"
+    #
+    # These defaults are a starting point, NOT a guarantee — free-tier rosters rotate
+    # without notice, and this project has already watched a whole model family disappear
+    # from a live account. Treat "model does not exist" as a config task, not an outage:
+    # list what the key can reach and set LLM_MODEL_* in .env.
+    llm_model_classifier: str = "openai/gpt-oss-20b"
+    llm_model_executor: str = "openai/gpt-oss-120b"
+    llm_model_validator: str = "openai/gpt-oss-20b"
 
     # ── Agent loop ──────────────────────────────────────────────────────────
     max_steps: int = Field(default=40, gt=0)

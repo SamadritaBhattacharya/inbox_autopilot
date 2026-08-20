@@ -29,6 +29,16 @@ from app.telemetry.records import Role, Usage
 MessageRole = Literal["system", "user", "assistant", "tool"]
 
 
+class ToolCall(BaseModel):
+    """A structured action the model chose. Never free-text parsed."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
 class Message(BaseModel):
     """A conversation turn, in OUR vocabulary rather than any provider's.
 
@@ -40,7 +50,10 @@ class Message(BaseModel):
 
     role: MessageRole
     content: str = ""
-    # Set on an assistant turn that called tools, and echoed on the matching tool result.
+    # An assistant turn that called tools carries them here; the matching tool result
+    # echoes the id in `tool_call_id`. Replaying history needs both halves or the provider
+    # rejects the conversation as malformed.
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None
     # Opt-in marker for a stable, cache-marked prefix. Prompt caching is a primary
@@ -48,20 +61,21 @@ class Message(BaseModel):
     cacheable: bool = False
 
 
-class ToolCall(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    id: str
-    name: str
-    args: dict[str, Any] = Field(default_factory=dict)
-
-
 class LLMResult(BaseModel):
     """One completion, plus everything the trajectory needs to account for it."""
 
     model_config = ConfigDict(frozen=True)
 
+    #: The assistant's visible content.
     text: str = ""
+    #: The model's chain of thought, when the provider exposes it separately.
+    #:
+    #: Reasoning models return their thinking in a dedicated field and leave `content`
+    #: EMPTY on a tool-calling turn. Reading only `content` there silently discards the
+    #: explanation — which would fail think-before-act on every turn and leave the cockpit
+    #: with nothing to show. Both are kept: `text` is what the model said, `reasoning` is
+    #: how it got there.
+    reasoning: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
     provider: str = ""
@@ -69,9 +83,14 @@ class LLMResult(BaseModel):
     latency_ms: int = 0
 
     @property
+    def explanation(self) -> str:
+        """What to show the human and replay into history. Prefers explicit reasoning."""
+        return self.reasoning.strip() or self.text.strip()
+
+    @property
     def has_reasoning(self) -> bool:
         """Think-before-act: a tool call with no explanation is rejected upstream."""
-        return len(self.text.strip()) >= 3
+        return len(self.explanation) >= 3
 
 
 # ── errors ──────────────────────────────────────────────────────────────────

@@ -1,0 +1,115 @@
+"""The PII vault — the reason the model never sees a real address.
+
+One vault per session. It holds the only mapping from token back to the real value, it
+lives in the executor next to the DOM, and it is **never persisted** — not to the
+checkpointer, not to the trajectory, not to a log.
+
+Three properties carry the whole security story:
+
+**Stable within a session.** `alice@corp.com` is `P17` for the entire run, so the model can
+reason about "the same person" across turns without ever learning who that is.
+
+**Never reused across sessions.** A fresh `thread_id` gets a fresh vault and fresh
+numbering. If tokens were global and stable, they would themselves become identifiers —
+`P17` meaning the same human every day is just a pseudonym, and pseudonyms correlate.
+
+**One-way for the brain.** The backend holds no reverse map and cannot resolve `P17`. Only
+the executor can, and only at the moment of dispatch.
+"""
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from app.security.patterns import TOKEN_PREFIX, PiiKind
+
+
+class UnknownToken(KeyError):
+    """A token this vault never minted.
+
+    Raised rather than passed through. A silent passthrough would let an injected string
+    like `P999` — or a literal address the model invented — reach a real action, which is
+    precisely the attack the token scheme exists to stop.
+    """
+
+
+@runtime_checkable
+class PiiVault(Protocol):
+    def tokenize(self, text: str) -> str: ...
+    def resolve(self, token: str) -> str: ...
+
+
+class SessionPiiVault:
+    """Per-session token store. In memory, and it stays there."""
+
+    def __init__(self) -> None:
+        # value -> token, and token -> value. Two dicts rather than one plus a scan: the
+        # forward direction runs on every element of every observation.
+        self._forward: dict[str, str] = {}
+        self._reverse: dict[str, str] = {}
+        self._counters: dict[PiiKind, int] = dict.fromkeys(PiiKind, 0)
+
+    # ── minting ─────────────────────────────────────────────────────────────
+
+    def token_for(self, value: str, kind: PiiKind) -> str:
+        """The token for `value`, minting one on first sight.
+
+        Normalised on the way in so `Alice@Corp.com` and `alice@corp.com` are one person
+        rather than two — the model would otherwise reason about them as different people
+        and, worse, the approval preview would show two recipients where there is one.
+        """
+        normalised = self._normalise(value, kind)
+        if normalised in self._forward:
+            return self._forward[normalised]
+
+        self._counters[kind] += 1
+        token = f"{TOKEN_PREFIX[kind]}{self._counters[kind]}"
+        self._forward[normalised] = token
+        # The reverse map keeps the ORIGINAL spelling: what gets typed into Gmail should be
+        # what the user actually wrote, not our lowercased version.
+        self._reverse[token] = value
+        return token
+
+    @staticmethod
+    def _normalise(value: str, kind: PiiKind) -> str:
+        stripped = value.strip()
+        if kind is PiiKind.EMAIL:
+            return stripped.lower()
+        if kind is PiiKind.PHONE:
+            # Formatting is not identity: +91 98765 43210 and +919876543210 are one number.
+            return "".join(c for c in stripped if c.isdigit() or c == "+")
+        if kind is PiiKind.PERSON:
+            return " ".join(stripped.lower().split())
+        return stripped
+
+    # ── resolution (executor-side only) ─────────────────────────────────────
+
+    def resolve(self, token: str) -> str:
+        try:
+            return self._reverse[token.strip()]
+        except KeyError as exc:
+            raise UnknownToken(
+                f"{token!r} was never minted by this session's vault. A token the model "
+                "invented, or one carried over from another session, must not reach an action."
+            ) from exc
+
+    def knows(self, token: str) -> bool:
+        return token.strip() in self._reverse
+
+    # ── introspection, for tests and the leak suite ─────────────────────────
+
+    @property
+    def size(self) -> int:
+        return len(self._reverse)
+
+    def tokens(self) -> list[str]:
+        return list(self._reverse)
+
+    def __repr__(self) -> str:
+        """Never render the mapping.
+
+        A vault ends up inside an exception or a debug log eventually; the default dataclass
+        style repr would print every address it holds at exactly that moment.
+        """
+        return f"<SessionPiiVault {self.size} tokens>"
+
+    __str__ = __repr__

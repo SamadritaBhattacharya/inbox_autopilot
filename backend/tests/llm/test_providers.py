@@ -1,0 +1,123 @@
+"""Chain construction, and the guardrail that model slugs stay configuration."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from app.config.settings import Settings
+from app.llm.fallback import FallbackLLMClient
+from app.llm.providers import (
+    BASE_URLS,
+    EXTRA_HEADERS,
+    PROVIDER_ORDER,
+    build_llm_client,
+    build_provider,
+)
+
+APP_DIR = Path(__file__).resolve().parents[2] / "app"
+SETTINGS_FILE = APP_DIR / "config" / "settings.py"
+
+
+def settings_with(**keys) -> Settings:
+    return Settings(_env_file=None, **keys)
+
+
+# ── chain construction ──────────────────────────────────────────────────────
+
+
+def test_unkeyed_providers_are_skipped_not_attempted():
+    """Including a keyless provider means every run pays a 401 and a hop before working."""
+    chain = build_llm_client(settings_with(groq_api_key="g", gemini_api_key="x"))
+
+    assert isinstance(chain, FallbackLLMClient)
+    assert [p.name for p in chain._providers] == ["groq", "gemini"]
+
+
+def test_chain_follows_the_declared_fallback_order():
+    """Groq leads: per-step latency compounds across a loop."""
+    chain = build_llm_client(
+        settings_with(gemini_api_key="x", openrouter_api_key="o", groq_api_key="g")
+    )
+    assert [p.name for p in chain._providers] == ["groq", "openrouter", "gemini"]
+
+
+def test_no_configured_provider_fails_at_wiring_time():
+    with pytest.raises(ValueError, match="No LLM provider is configured"):
+        build_llm_client(settings_with())
+
+
+def test_retry_budget_comes_from_settings():
+    chain = build_llm_client(settings_with(groq_api_key="g", llm_max_retries=5))
+    assert chain._max_retries == 5
+
+
+def test_every_ordered_provider_has_a_base_url():
+    assert set(PROVIDER_ORDER) == set(BASE_URLS)
+
+
+def test_unknown_provider_is_rejected():
+    with pytest.raises(ValueError, match="Unknown provider"):
+        build_provider("anthropic", settings_with(groq_api_key="g"))
+
+
+# ── per-provider configuration ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", PROVIDER_ORDER)
+def test_provider_uses_its_own_endpoint_and_the_configured_models(name):
+    settings = settings_with(**{f"{name}_api_key": "k"}, llm_model_executor="configured/model")
+    provider = build_provider(name, settings)
+
+    assert provider._base_url == BASE_URLS[name].rstrip("/")
+    assert provider.model_for("executor") == "configured/model"
+    assert provider._api_key == "k"
+
+
+def test_only_openrouter_sends_attribution_headers():
+    assert set(EXTRA_HEADERS) == {"openrouter"}
+    assert "HTTP-Referer" in EXTRA_HEADERS["openrouter"]
+
+
+def test_gemini_is_reached_through_its_openai_compatible_layer():
+    """Which is why it needs no adapter of its own."""
+    assert BASE_URLS["gemini"].endswith("/openai")
+
+
+# ── the guardrail ───────────────────────────────────────────────────────────
+
+
+def test_model_slugs_appear_only_in_settings():
+    """A slug baked into code is a time bomb — free-tier rosters rotate without notice.
+
+    Asserts the DEFAULT slugs exist in exactly one place. If a node, an adapter, or a
+    prompt ever hardcodes one, this fails and names the file.
+    """
+    defaults = {
+        settings_with().llm_model_classifier,
+        settings_with().llm_model_executor,
+        settings_with().llm_model_validator,
+    }
+
+    offenders: list[str] = []
+    for path in APP_DIR.rglob("*.py"):
+        if path == SETTINGS_FILE:
+            continue
+        text = path.read_text(encoding="utf-8")
+        offenders += [
+            f"{path.relative_to(APP_DIR)} contains model slug {slug!r}"
+            for slug in defaults
+            if slug in text
+        ]
+
+    assert not offenders, "; ".join(offenders)
+
+
+def test_no_free_tier_model_id_is_pinned_anywhere():
+    """OpenRouter's `:free` roster rotates; a pinned id breaks silently later."""
+    offenders = [
+        str(path.relative_to(APP_DIR))
+        for path in APP_DIR.rglob("*.py")
+        if ":free" in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, f"pinned :free model id in {offenders}"
