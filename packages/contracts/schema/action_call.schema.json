@@ -1,0 +1,21 @@
+{
+  "$id": "https://inbox-autopilot.dev/schema/action_call.json",
+  "additionalProperties": false,
+  "properties": {
+    "args": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Args",
+      "type": "object"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "ActionCall",
+  "type": "object"
+}

@@ -1,0 +1,53 @@
+set shell := ["bash", "-uc"]
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+
+# `just` is optional — every recipe below is mirrored as an npm script in package.json,
+# so `pnpm run <name>` works identically without installing just.
+
+default:
+    @just --list
+
+# Install everything: backend venv (uv fetches Python 3.12), JS workspace, contracts build.
+setup:
+    uv sync --project backend
+    pnpm install
+    just gen-contracts
+
+# Chromium for the Playwright surface (M1) — separate because it's a large download.
+setup-browser:
+    uv run --project backend playwright install chromium
+
+# Regenerate contracts: Pydantic -> JSON Schema -> Zod -> build @inbox/contracts
+gen-contracts:
+    uv run --project backend python packages/contracts/scripts/gen.py
+    node packages/contracts/scripts/gen-zod.mjs
+    pnpm -C packages/contracts build
+
+# Drift guard: regenerate and fail if committed artifacts changed.
+check: gen-contracts
+    git diff --exit-code -- packages/contracts/schema packages/contracts/src/generated
+
+# All tests: backend + contracts (pytest) then the JS workspace (vitest).
+test:
+    uv run --project backend pytest -q backend/tests packages/contracts/tests
+    pnpm -r test
+
+test-py:
+    uv run --project backend pytest -q backend/tests packages/contracts/tests
+
+test-js:
+    pnpm -r test
+
+lint:
+    uv run --project backend ruff check backend packages/contracts
+
+# Dev servers
+dev-backend:
+    uv run --project backend uvicorn app.api.main:app --reload
+
+dev-frontend:
+    pnpm -C frontend dev
+
+# Benchmark harness (M6)
+bench:
+    uv run --project backend python -m bench.run_bench

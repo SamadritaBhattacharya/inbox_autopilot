@@ -1,0 +1,45 @@
+{
+  "$id": "https://inbox-autopilot.dev/schema/action_result.json",
+  "additionalProperties": false,
+  "properties": {
+    "errorCode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Errorcode"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    },
+    "success": {
+      "title": "Success",
+      "type": "boolean"
+    },
+    "undo": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Undo"
+    }
+  },
+  "required": [
+    "success"
+  ],
+  "title": "ActionResult",
+  "type": "object"
+}

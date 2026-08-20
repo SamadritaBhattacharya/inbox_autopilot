@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+/*
+ * Monochrome by design.
+ *
+ * The cockpit is a place to WATCH something: live browser frames on one side, the agent's
+ * reasoning on the other. Every colour the interface spends on itself is colour competing
+ * with the thing you are actually here to look at.
+ *
+ * So the chrome is black, white, and grey — and colour is reserved for MEANING. Against a
+ * monochrome field, the two or three moments that are coloured become unmissable, which
+ * is exactly the property an approval gate needs: you cannot skim past the one control
+ * that sends an email on your behalf.
+ */
+@theme {
+  /* ── surfaces, darkest to lightest ── */
+  --color-ink: #08080a;
+  --color-surface: #0e0e11;
+  --color-raised: #16161a;
+  --color-raised2: #1e1e23;
+
+  /* ── lines ── */
+  --color-line: #26262c;
+  --color-line2: #33333a;
+
+  /* ── text, brightest to dimmest ── */
+  --color-text: #f4f4f5;
+  --color-muted: #a1a1aa;
+  --color-faint: #6b6b74;
+
+  /* ── semantic accents: used ONLY to mean something ──
+   * pending  - a human decision is blocking the run
+   * danger   - a failure, or an irreversible action about to happen
+   * good     - a verified success
+   * Nothing decorative may use these.
+   */
+  --color-pending: #d4a72c;
+  --color-danger: #e5484d;
+  --color-good: #3dd68c;
+
+  --radius-card: 0.875rem;
+  --radius-control: 0.625rem;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", monospace;
+}
+
+html,
+body {
+  background: var(--color-ink);
+  color: var(--color-text);
+}
+
+/* Motion is a cue that state changed, not decoration — keep it quick and consistent. */
+@media (prefers-reduced-motion: no-preference) {
+  .transition-smooth {
+    transition-property: color, background-color, border-color, opacity, transform;
+    transition-duration: 160ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+/* A restrained scrollbar; the default light one breaks the monochrome field. */
+.scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line2) transparent;
+}

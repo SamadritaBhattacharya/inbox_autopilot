@@ -46,9 +46,9 @@ composition root exists and is the only place concretes are constructed.
 
 ### Tasks
 
-- [ ] **M0.1 — Root tooling.** `.gitignore`, `.env.example`, `pnpm-workspace.yaml`, root
+- [x] **M0.1 — Root tooling.** `.gitignore`, `.env.example`, `pnpm-workspace.yaml`, root
       `package.json`, `justfile`. `.gitignore` must cover `.env`, `runs/`, `node_modules/`, `.venv/`.
-- [ ] **M0.2 — `packages/contracts`.** Author `Viewport`, `Element`, `MailContext`, `Observation`,
+- [x] **M0.2 — `packages/contracts`.** Author `Viewport`, `Element`, `MailContext`, `Observation`,
       `ActionCall`, `ActionResult`, `Envelope`, `PROTOCOL_VERSION` per
       [`WS-PROTOCOL.md §2`](WS-PROTOCOL.md). `scripts/gen.py` emits `schema/*.json`;
       `scripts/gen-zod.mjs` emits `src/generated/*.ts`.
@@ -56,20 +56,50 @@ composition root exists and is the only place concretes are constructed.
     sample with the generated Zod and rejects an invalid one.
   - *Test:* `Observation` **rejects** a payload containing `x`, `y`, `url`, or `html` — invariants 1,
     2 and 4 are schema-level, not convention.
-- [ ] **M0.3 — Backend skeleton.** `app/api/main.py` with `/health`; `app/config/settings.py`
+- [x] **M0.3 — Backend skeleton.** `app/api/main.py` with `/health`; `app/config/settings.py`
       (pydantic-settings, `.env`); empty `__init__.py` for every package in the layout.
-- [ ] **M0.4 — Composition root.** `app/config/container.py` with `build_default_app(...)` accepting
+- [x] **M0.4 — Composition root.** `app/config/container.py` with `build_default_app(...)` accepting
       injectable overrides for every port. It is empty of logic — it only wires.
-- [ ] **M0.5 — Frontend scaffold (Next.js).** App Router, Tailwind v4, `app/layout.tsx`,
-      `app/page.tsx`, `lib/env.ts` (Zod-validated `NEXT_PUBLIC_WS_URL`). Consumes `@inbox/contracts`.
-- [ ] **M0.6 — Extension scaffold.** MV3 manifest, Vite build, `@inbox/contracts` dependency. No
-      logic yet.
-- [ ] **M0.7 — CI.** `just check` + `just test` on push. A contract-drift PR must fail.
+- [x] **M0.5 — Cockpit scaffold (Next.js 16).** Generated with `create-next-app@latest`
+      (App Router, TypeScript, Tailwind v4, ESLint, no `src/`). Renamed to `@inbox/cockpit`, wired to
+      the workspace, `lib/env.ts` (Zod-validated `NEXT_PUBLIC_WS_URL`), monochrome theme tokens, and
+      a static landing shell that imports `PROTOCOL_VERSION` from `@inbox/contracts` — which is what
+      proves the codegen actually reaches a consumer. **The live cockpit itself lands at M3.**
+- [ ] **M0.6 — Extension scaffold.** Deferred to **M6.7**, where it is built alongside
+      `ExtensionEmailSurface`. There is nothing for it to drive until the funnel and action
+      dispatcher exist.
+- [x] **M0.7 — CI.** Contract-drift guard + tests + cockpit typecheck/build on push, plus a
+      standing secret-scan job (no committed key patterns, `.env` untracked, and `frontend/` may
+      reference exactly one `NEXT_PUBLIC_*` variable).
 
-**Acceptance**
-- `just setup` completes on a clean machine (including `playwright install chromium`).
-- `just check` is clean; deliberately editing a generated file makes it fail.
-- `just test` green. `GET /health` returns 200. Frontend and extension build.
+**Acceptance** *(met)*
+- ✅ `pnpm run setup` completes on a clean machine (uv fetches Python 3.12; Chromium is a separate
+  `setup-browser` recipe so M0 does not pay for a large download it cannot use yet).
+- ✅ `pnpm run check` is clean; editing a generated file makes it fail.
+- ✅ `pnpm run test` green — 41 pytest + 27 vitest at M0 close. `GET /health` returns 200 with the
+  protocol version. `pnpm -C frontend build` succeeds (Next 16.3.1 / Turbopack / React 19.2.8).
+
+**Notes from the build**
+- The Zod generator rendered `#/$defs/*` as `z.any()`, silently dropping `.strict()` from nested
+  `Element` / `Viewport` / `MailContext`. That would have left the no-coordinates invariant enforced
+  in Python but **not** in TypeScript. `scripts/gen-zod.mjs` now dereferences `$ref` before emitting;
+  both sides are tested against the same hostile payloads.
+- Pydantic does not serialize `default_factory` into JSON Schema, so `elements` generated as
+  `Element[] | undefined` while always being a list in Python. `scripts/gen.py` now emits explicit
+  container defaults so the two sides cannot disagree.
+- `create-next-app` writes a nested `pnpm-workspace.yaml` inside `frontend/`, which would make it
+  its own workspace root and detach it from the monorepo. Removed; its `allowBuilds` entries were
+  merged into the root file.
+
+**Next.js 16 facts that change M3** *(from `frontend/node_modules/next/dist/docs`, not from memory —
+the scaffold ships an `AGENTS.md` warning that v16 diverges from training data, and it is right)*
+- **Request APIs are async-only.** `params`, `searchParams`, `cookies()`, `headers()` can no longer
+  be read synchronously. `app/run/[threadId]/page.tsx` must `await params`.
+- **Route types are generated**, not hand-written: `LayoutProps<"/">`, `PageProps<"/run/[threadId]">`
+  come from `next typegen`. A bare `tsc --noEmit` on a clean checkout fails until typegen runs, so
+  the `typecheck` script and CI both run it first.
+- **Turbopack is the default** bundler for `dev` and `build`.
+- `middleware` is renamed to `proxy`; `revalidateTag` now requires a `cacheLife` argument.
 
 ---
 
@@ -80,7 +110,7 @@ becoming a tokenized `Observation`.
 
 ### Tasks
 
-- [ ] **M1.1 — `LLMClient` port + `FallbackLLMClient`.** Ordered chain; advance on 429/quota/5xx;
+- [x] **M1.1 — `LLMClient` port + `FallbackLLMClient`.** Ordered chain; advance on 429/quota/5xx;
       retry transient errors with backoff respecting `Retry-After`; **never re-route inside a retry**.
   - *Test:* provider 1 returns 429 → provider 2 is called, same messages, once.
   - *Test:* a retry uses the same model; a fallback uses the next provider.

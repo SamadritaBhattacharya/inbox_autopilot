@@ -214,6 +214,18 @@ dedicated one. Never a personal mailbox.
 directly reattachable), Server Components for the static shell and run history, and a one-push
 deploy on Vercel.
 
+**Design direction (confirmed).** Minimal monochrome — black, white, and grey tones only, one
+consistent theme throughout. Rounded corners, sleek and modern, with smooth transitions; the
+interface should recede so the agent's work is the only thing competing for attention. A live agent
+cockpit is already dense with signal, so colour is reserved for meaning (pending approval, failure,
+recommended option) and never used for decoration.
+
+**Component strategy (confirmed).** Hand-rolled Tailwind for the cockpit's bespoke surfaces — the
+two-pane layout, the transcript, the canvas viewport — where a component library would be fought
+rather than used. `shadcn/ui` (copy-in Radix primitives) for the interaction-heavy, accessibility-
+sensitive pieces: the approval card, question card, options card, and any dialog or popover. Copy-in
+rather than a dependency means those primitives are ours to restyle into the monochrome theme.
+
 **Cost accepted.** A live WebSocket cockpit is not Next.js's happy path. Mitigations are structural
 and non-negotiable:
 - **Exactly one `"use client"` root** (`CockpitClient`); everything live hangs beneath it.

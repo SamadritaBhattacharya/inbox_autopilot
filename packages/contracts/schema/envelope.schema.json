@@ -1,0 +1,38 @@
+{
+  "$id": "https://inbox-autopilot.dev/schema/envelope.json",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Id"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Payload",
+      "type": "object"
+    },
+    "protocolVersion": {
+      "default": "1.0.0",
+      "title": "Protocolversion",
+      "type": "string"
+    },
+    "type": {
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "Envelope",
+  "type": "object"
+}

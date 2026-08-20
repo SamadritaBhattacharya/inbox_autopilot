@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "Element": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "title": "Index",
+          "type": "integer"
+        },
+        "isNew": {
+          "default": false,
+          "title": "Isnew",
+          "type": "boolean"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "index",
+        "role"
+      ],
+      "title": "Element",
+      "type": "object"
+    },
+    "MailContext": {
+      "additionalProperties": false,
+      "properties": {
+        "composeOpen": {
+          "default": false,
+          "title": "Composeopen",
+          "type": "boolean"
+        },
+        "threadToken": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threadtoken"
+        },
+        "unreadCount": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unreadcount"
+        },
+        "view": {
+          "enum": [
+            "inbox",
+            "thread",
+            "compose",
+            "search",
+            "sent",
+            "drafts",
+            "calendar"
+          ],
+          "title": "View",
+          "type": "string"
+        }
+      },
+      "required": [
+        "view"
+      ],
+      "title": "MailContext",
+      "type": "object"
+    },
+    "Viewport": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "title": "Height",
+          "type": "integer"
+        },
+        "scrollX": {
+          "default": 0,
+          "title": "Scrollx",
+          "type": "integer"
+        },
+        "scrollY": {
+          "default": 0,
+          "title": "Scrolly",
+          "type": "integer"
+        },
+        "width": {
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "title": "Viewport",
+      "type": "object"
+    }
+  },
+  "$id": "https://inbox-autopilot.dev/schema/observation.json",
+  "additionalProperties": false,
+  "properties": {
+    "changed": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Changed"
+    },
+    "contextId": {
+      "title": "Contextid",
+      "type": "string"
+    },
+    "droppedCount": {
+      "default": 0,
+      "title": "Droppedcount",
+      "type": "integer"
+    },
+    "elements": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Element"
+      },
+      "title": "Elements",
+      "type": "array"
+    },
+    "mail": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MailContext"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "protocolVersion": {
+      "default": "1.0.0",
+      "title": "Protocolversion",
+      "type": "string"
+    },
+    "screenshotRef": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Screenshotref"
+    },
+    "title": {
+      "default": "",
+      "title": "Title",
+      "type": "string"
+    },
+    "viewport": {
+      "$ref": "#/$defs/Viewport"
+    }
+  },
+  "required": [
+    "contextId",
+    "viewport"
+  ],
+  "title": "Observation",
+  "type": "object"
+}

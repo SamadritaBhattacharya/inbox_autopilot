@@ -18,7 +18,8 @@
 | Browser control | Playwright (Chromium) + raw CDP | latest | Playwright for launch/targets/nav/screenshot; raw CDP for `DOMSnapshot`, `Accessibility`, `Input.*` |
 | Extension | TypeScript + `chrome.debugger` (MV3) | — | The only way to get trusted input in the user's own Chrome |
 | **Frontend** | **Next.js (App Router) + React 18** | 15.x | See §3 |
-| Styling | Tailwind CSS | v4 | Utility-first; matches the reference cockpit's density |
+| Styling | Tailwind CSS | v4 | Utility-first; suits a dense cockpit where every rule is layout |
+| UI primitives | `shadcn/ui` (copy-in Radix) | latest | Accessible dialog/card/popover for the approval, question, and options cards — copied in, so they restyle to our theme rather than fighting a dependency |
 | Client state / data | TanStack Query + Zustand | latest | Query for run history REST; Zustand for the live WS event store |
 | Client validation | Zod (**generated**) | latest | Generated from the Pydantic schema; never hand-written |
 | Real-time | WebSocket | — | Bidirectional; needed for `answer` / `decision` frames going *up* |
@@ -88,7 +89,17 @@ frontend/
 └─ next.config.ts
 ```
 
-### 3.2 The rules that keep it sane
+### 3.2 Visual language
+
+Monochrome and minimal: black, white, and grey only, one theme, applied consistently. Rounded
+corners, sleek modern surfaces, smooth transitions between states. The cockpit is a place to *watch*
+something, so the chrome recedes and the agent's output carries the page.
+
+**Colour is reserved for meaning, never decoration** — a pending approval, a failure, the
+recommended option. In a monochrome interface those few coloured moments become unmissable, which is
+exactly the property an approval gate needs. Anything that is merely "nice to look at" is grey.
+
+### 3.3 The rules that keep it sane
 
 | Rule | Why |
 | --- | --- |

@@ -1,0 +1,16 @@
+packages:
+  - "packages/*"
+  - "frontend"
+  - "bridge-extension"
+
+# Postinstall scripts are opt-in. Each entry below is a deliberate decision rather than a
+# blanket enable:
+#   esbuild            - ships the platform binary vitest needs
+#   @tailwindcss/oxide - Tailwind v4's native engine; styles do not compile without it
+#   sharp/unrs-resolver - declined per the Next.js scaffold's own recommendation; Next 16
+#                         does not need them built locally, and skipping keeps installs fast
+allowBuilds:
+  esbuild: true
+  "@tailwindcss/oxide": true
+  sharp: false
+  unrs-resolver: false
