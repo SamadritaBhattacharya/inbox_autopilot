@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Friday demo moved to 4pm - inbox</title>
+  <style>
+    body { font: 14px/1.6 system-ui, sans-serif; margin: 0; }
+    header { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #ddd; }
+    .subject { padding: 16px 16px 4px; font-size: 20px; font-weight: 600; }
+    .msg { padding: 12px 16px; border-bottom: 1px solid #eee; }
+    .from { font-weight: 600; }
+    .when { color: #777; font-size: 12px; }
+    .text { margin-top: 6px; white-space: pre-wrap; }
+    .actions { display: flex; gap: 8px; padding: 12px 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <button id="back">Back to inbox</button>
+    <button id="archive">Archive</button>
+    <button id="reply">Reply</button>
+  </header>
+
+  <div class="subject" id="thread-subject">Friday demo moved to 4pm</div>
+
+  <div class="msg">
+    <span class="from" email="priya.nair@corp.com" name="Priya Nair">Priya Nair</span>
+    <span class="when">Tue 20 Aug, 09:14</span>
+    <div class="text">Hi both — the client pushed the demo. Can we do Friday 22 August at 16:00 IST instead of the morning slot? Should take about 45 minutes.</div>
+  </div>
+
+  <div class="msg">
+    <span class="from" email="dev.kapoor@corp.com" name="Dev Kapoor">Dev Kapoor</span>
+    <span class="when">Tue 20 Aug, 09:31</span>
+    <div class="text">Friday 4pm works for me. I'll bring the Q3 numbers.</div>
+  </div>
+
+  <div class="msg">
+    <span class="from" email="ops@corp.example" name="Ops Team">Ops Team</span>
+    <span class="when">Tue 20 Aug, 10:02</span>
+    <div class="text">Room 3 is free then. Call me on +91 98765 43210 if it changes.</div>
+  </div>
+
+  <div class="actions">
+    <button id="reply-all">Reply all</button>
+    <button id="forward">Forward</button>
+  </div>
+</body>
+</html>

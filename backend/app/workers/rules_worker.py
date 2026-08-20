@@ -9,9 +9,11 @@ faster and wrong: archiving row 3 renumbers everything below it, so a list of in
 collected up front is stale after the first action. Re-observing costs nothing here (no
 model call) and makes the stale-index class of bug impossible rather than merely unlikely.
 
-A progress guard is mandatory, not defensive. If an action silently fails, the same row
-matches again next turn and the worker archives nothing forever — a free-of-charge infinite
-loop is still an infinite loop.
+A progress guard is mandatory, not defensive — and it must measure the PAGE, not the
+action's own success flag. An action that reports success while changing nothing is the most
+common way a browser agent wastes a run, and a guard that trusts the flag will happily
+"archive" the same row two hundred times. A free-of-charge infinite loop is still an
+infinite loop.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import re
 
 from inbox_contracts import ActionCall, Element, Observation
 
+from app.agent.guards import page_signature
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
 from app.rules.store import Rule, RulesStore
@@ -83,6 +86,7 @@ def build_linear_node(surface: EmailSurface, emitter: EventEmitter, rules: Rules
         handled = 0
         stalls = 0
         history: list[StepRecord] = []
+        previous_signature = ""
 
         while handled < MAX_ITEMS:
             try:
@@ -97,9 +101,21 @@ def build_linear_node(surface: EmailSurface, emitter: EventEmitter, rules: Rules
                     "reason": str(exc),
                 }
 
+            # Measured, not claimed: if the page is byte-identical to last turn, nothing
+            # landed, whatever the action result said.
+            signature = page_signature(observation)
+            page_moved = signature != previous_signature
+            previous_signature = signature
+
             matches = matching_elements(observation, rule)
             if not matches:
                 break
+
+            if handled and not page_moved:
+                stalls += 1
+                if stalls >= MAX_STALLS:
+                    return _stalled(rule, handled, history)
+                continue
 
             # One at a time, then look again: acting on row 3 renumbers everything below it.
             target = matches[0]
@@ -127,17 +143,7 @@ def build_linear_node(surface: EmailSurface, emitter: EventEmitter, rules: Rules
             else:
                 stalls += 1
                 if stalls >= MAX_STALLS:
-                    return {
-                        "finished": True,
-                        "success": False,
-                        "status": "failed",
-                        "error_code": ErrorCode.STUCK,
-                        "reason": (
-                            f"rule {rule.name!r} stopped having any effect after {handled} "
-                            "item(s) — the actions are not landing."
-                        ),
-                        "history": history,
-                    }
+                    return _stalled(rule, handled, history)
 
         summary = (
             f"Applied rule {rule.name!r} to {handled} item{'' if handled == 1 else 's'} "
@@ -164,3 +170,18 @@ def _args_for(verb: str, target: Element, rule: Rule) -> dict:
     if verb == "Snooze":
         args["until"] = "tomorrow 9am"
     return args
+
+
+def _stalled(rule: Rule, handled: int, history: list[StepRecord]) -> dict:
+    """Give up, typed, rather than grinding on a page that never changes."""
+    return {
+        "finished": True,
+        "success": False,
+        "status": "failed",
+        "error_code": ErrorCode.STUCK,
+        "reason": (
+            f"rule {rule.name!r} stopped having any effect after {handled} item(s) — "
+            "the actions reported success but the page never changed."
+        ),
+        "history": history,
+    }

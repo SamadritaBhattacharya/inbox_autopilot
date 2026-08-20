@@ -397,17 +397,17 @@ from the LLM.
 
 ### Tasks
 
-- [ ] **M6.1 — `CalendarWorker`.** Extract event details from a thread → build the event → **approval
+- [x] **M6.1 — `CalendarWorker`.** Extract event details from a thread → build the event → **approval
       on invite dispatch**.
-- [ ] **M6.2 — Compaction.** Layer 0 (strip seen screenshots/observations), layer 1 (truncate old
+- [x] **M6.2 — Compaction.** Layer 0 (strip seen screenshots/observations), layer 1 (truncate old
       tool outputs), layer 2 (LLM-summarize the middle, keep first-2 + last-6 verbatim). Trigger at
       ~95% of the window on real API `input_tokens`.
-- [ ] **M6.3 — Prompt caching.** Stable cache-marked prefix; growing memory in a later message so
+- [x] **M6.3 — Prompt caching.** Stable cache-marked prefix; growing memory in a later message so
       appends do not bust the cache.
 - [ ] **M6.4 — Batched classification.** One classifier call scores N subjects for triage.
-- [ ] **M6.5 — Benchmark harness.** Fixture mailbox + scripted tasks + expected outcomes; reports
+- [x] **M6.5 — Benchmark harness.** Fixture mailbox + scripted tasks + expected outcomes; reports
       success rate, steps, tokens, and **% terminated with a typed code**.
-- [ ] **M6.6 — Adversarial fixtures.** Overlay-blocked compose; moved button; oscillation bait;
+- [x] **M6.6 — Adversarial fixtures.** Overlay-blocked compose; moved button; oscillation bait;
       **the prompt-injection email** from [`SECURITY-MODEL.md §4.1`](SECURITY-MODEL.md); a provider
       forced to 429 mid-run.
 - [ ] **M6.7 — `ExtensionEmailSurface`.** TS funnel + tokenizer + `chrome.debugger` dispatch + relay
@@ -420,6 +420,69 @@ from the LLM.
 - Swapping the surface requires exactly one line in the composition root.
 
 ---
+
+> **M6 note — the benchmark's first run corrected two things, one in each direction.**
+>
+> **A real bug in the `RulesWorker`.** Its stall guard trusted `ActionResult.success`, so a
+> surface reporting success while changing nothing let it "archive" the same row two hundred
+> times. It now measures the **page signature** — the same `NO_EFFECT` signal the feedback
+> loop uses, and the same lesson twice: an action's own success flag cannot tell you whether
+> anything happened.
+>
+> **A modelling error in the benchmark itself.** Every adversarial case scored as
+> *untyped termination* because it ended `paused` — on an options card. But a run waiting
+> for a human has not failed, it is the recovery layer working. The harness now drives
+> interrupts to a real ending, with one absolute rule: **it never approves anything.** A
+> benchmark that could approve a send would be a benchmark that can send email, and no
+> reliability number is worth that.
+>
+> `expect_error` became a *set* for the same reason. Self-heal legitimately changes which
+> code ends a run — a stuck agent offered a remedy, trying it, then exhausting its budget
+> ends on `MAX_STEPS`. Pinning one code would measure the recovery path's incidental shape
+> instead of the property that matters: that it ended typed at all.
+>
+> **First numbers:** typed termination **100%**, task success **100%** (4 scored,
+> adversarial excluded), guardrail breaches **0**, and the rule-matched task at exactly
+> **one** model call.
+
+> **M6 refactor note — honouring two rules I had broken myself.**
+>
+> `ENGINEERING-SPEC` says prompts never live inline in Python, and I had put three multi-line
+> system prompts straight into modules. They now live in `app/prompts/*.txt`, loaded by name.
+> The spec said `jinja2`; the code uses plain `.txt`, because none of these prompts
+> interpolate — state reaches the model as separate messages, which is exactly what keeps
+> the system prefix byte-stable and prompt caching working. **The doc was corrected to match
+> the code, not the other way round**, and the reason is written down.
+>
+> The same spec sets a ~300-line trip-wire. Four modules had drifted past it. Split where the
+> seam was real:
+> - `workers/rendering.py` — how the mailbox is described to the model: pure, no control flow
+> - `workers/internal_verbs.py` — verbs the graph owns rather than the surface. The dividing
+>   line: if a verb changes what is ON SCREEN the surface performs it; if it changes what the
+>   RUN KNOWS, this does
+> - `workers/approval_gate.py` — lifted out of `graph.py`, so a reader auditing "can anything
+>   send without a human?" answers it from the edge list rather than scrolling past node bodies
+>
+> **Still over, and left that way on purpose:** `workers/loop.py` (411), `surface/playwright_surface.py`
+> (397), `agent/graph.py` (336). Each passes the rule's real test — one nameable job — and
+> splitting them further would scatter one coherent story across files to satisfy a number.
+> Recording it as a known deviation rather than quietly relaxing the rule.
+
+> **M6.1 scope — the calendar worker drafts; it does not book.**
+>
+> It reads a thread and emits a **proposal**: title, when, duration, attendees (as tokens),
+> and the words it took them from. It creates no event and invites nobody, and the tool set
+> contains no verb that could — `CALENDAR_TOOLS` is read-only.
+>
+> That is the documented v1 scope ([PRD Q3](PRD.md)), and it is where the value actually is.
+> A mis-drafted proposal costs a glance; a mis-sent invite lands in other people's calendars
+> and cannot be recalled. The `evidence` field is carried for the same reason the diagnosis
+> carries its evidence — a proposal without the words it came from asks the user to take it
+> on trust.
+>
+> **Still open:** actual invite dispatch, which would be a gated verb behind the approval
+> gate with the executor resolving attendee tokens for the human, exactly as a draft email is
+> resolved today.
 
 ## M7 — Polish, audit, deploy
 

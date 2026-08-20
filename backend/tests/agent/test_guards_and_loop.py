@@ -346,9 +346,9 @@ async def test_remember_writes_to_working_memory(emitter):
 
 async def test_the_observation_block_tells_the_model_what_it_cannot_see():
     """An agent that thinks the list is complete concludes a message does not exist."""
-    from app.workers.loop import _observation_block
+    from app.workers.rendering import observation_block
 
-    block = _observation_block(
+    block = observation_block(
         state(
             observation=observation(
                 dropped=18, hint="18 more items not shown: 5 above, 13 below."

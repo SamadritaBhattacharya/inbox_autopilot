@@ -102,6 +102,15 @@ class EventEmitter:
         """
         await self._emit(protocol.FEEDBACK_ACK, {"text": text, "accepted": accepted})
 
+    async def event_proposed(self, event: dict[str, Any]) -> None:
+        """A drafted calendar event.
+
+        Attendees stay as TOKENS here. The cockpit shows the proposal for review, and if an
+        invite dispatch is ever built it goes through the approval gate — where the executor
+        resolves the tokens for the human, exactly as it does for a draft email.
+        """
+        await self._emit(protocol.EVENT_PROPOSED, event)
+
     async def rule_candidate(self, suggestion: str, count: int) -> None:
         await self._emit(protocol.RULE_CANDIDATE, {"suggestion": suggestion, "count": count})
 

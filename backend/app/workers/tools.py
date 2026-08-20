@@ -129,6 +129,23 @@ class DeleteForever(BaseModel):
     index: int
 
 
+# ── calendar ────────────────────────────────────────────────────────────────
+
+
+class ProposeEvent(BaseModel):
+    """Propose a calendar event read out of the current thread. Creates NOTHING and invites
+    nobody — it drafts something for the human to look at."""
+
+    title: str = Field(description="What the event is")
+    when: str = Field(description="Date and time exactly as the thread states it")
+    duration: str = Field(default="", description="How long, if the thread says")
+    attendees: str = Field(
+        default="",
+        description="Person TOKENS, comma separated, e.g. 'C1, C2'. Never real addresses.",
+    )
+    evidence: str = Field(default="", description="The words in the thread you took this from")
+
+
 # ── memory and control ──────────────────────────────────────────────────────
 
 
@@ -203,14 +220,30 @@ COMPOSE_TOOLS: tuple[type[BaseModel], ...] = (
 #: even tempted, and no prompt-level negotiation is possible.
 QUERY_TOOLS: tuple[type[BaseModel], ...] = (*PERCEPTION_TOOLS, Click, *CONTROL_TOOLS)
 
+#: Calendar: read a thread, propose an event. **Read-only in v1.**
+#:
+#: It extracts and drafts; it does not create the event or send an invite. That is the
+#: documented v1 scope, and it is where the value actually is — turning a thread into a
+#: proposal a human can check costs nothing to get wrong, whereas a mis-sent invite lands in
+#: other people's calendars and cannot be recalled.
+CALENDAR_TOOLS: tuple[type[BaseModel], ...] = (
+    *PERCEPTION_TOOLS,
+    Click,
+    ProposeEvent,
+    *CONTROL_TOOLS,
+)
+
 TOOLSETS: dict[str, tuple[type[BaseModel], ...]] = {
     "query": QUERY_TOOLS,
+    "calendar": CALENDAR_TOOLS,
     "triage": TRIAGE_TOOLS,
     "compose": COMPOSE_TOOLS,
 }
 
 #: Verbs handled inside the graph rather than by the surface.
-INTERNAL_VERBS = frozenset({"Remember", "Recall", "SetPlan", "AskUser", "Complete", "Extract"})
+INTERNAL_VERBS = frozenset(
+    {"Remember", "Recall", "SetPlan", "AskUser", "Complete", "Extract", "ProposeEvent"}
+)
 
 
 def verb_names(tools: tuple[type[BaseModel], ...]) -> frozenset[str]:

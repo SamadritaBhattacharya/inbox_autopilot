@@ -121,6 +121,8 @@ class AppContainer:
             feedback=feedback or self.feedback,
             threshold=self.settings.context_confidence_threshold,
             max_steps=self.settings.max_steps,
+            context_budget=self.settings.context_budget_tokens,
+            approval_timeout_seconds=self.settings.approval_timeout_seconds,
         )
 
     def require_llm(self) -> LLMClient:

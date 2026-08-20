@@ -47,7 +47,7 @@ test-js:
     pnpm -r test
 
 lint:
-    uv run --project backend ruff check backend packages/contracts
+    uv run --project backend ruff check backend packages/contracts scripts
 
 # Dev servers
 dev-backend:
@@ -56,6 +56,6 @@ dev-backend:
 dev-frontend:
     pnpm -C frontend dev
 
-# Benchmark harness (M6)
+# Benchmark harness: reliability numbers on a deterministic suite (no provider needed).
 bench:
     uv run --project backend python -m bench.run_bench

@@ -2,7 +2,7 @@
   "name": "inbox-autopilot",
   "private": true,
   "version": "0.1.0",
-  "description": "Browser-driven email agent — manager graph over a browser-driving worker loop.",
+  "description": "Browser-driven email agent \u2014 manager graph over a browser-driving worker loop.",
   "scripts": {
     "setup": "uv sync --project backend && pnpm install && pnpm run gen-contracts",
     "gen-contracts": "uv run --project backend python packages/contracts/scripts/gen.py && node packages/contracts/scripts/gen-zod.mjs && pnpm -C packages/contracts build",
@@ -14,7 +14,8 @@
     "test:js": "pnpm -r test",
     "dev:backend": "uv run --project backend uvicorn app.api.main:app --reload",
     "dev:frontend": "pnpm -C frontend dev",
-    "lint:py": "uv run --project backend ruff check backend packages/contracts"
+    "lint:py": "uv run --project backend ruff check backend packages/contracts scripts",
+    "bench": "uv run --project backend python -m bench.run_bench"
   },
   "engines": {
     "node": ">=20"

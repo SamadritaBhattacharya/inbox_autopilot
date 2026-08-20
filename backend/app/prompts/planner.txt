@@ -1,0 +1,2 @@
+Given an email task, list the 3-6 steps you will take, one per line,
+no numbering and no commentary. Each step is a concrete action in a mail UI.

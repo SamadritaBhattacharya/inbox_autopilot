@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # Without a cap, a degenerate repetition loop runs to the provider limit and the blob
     # then poisons every later turn's context.
     llm_max_output_tokens: int = Field(default=2000, gt=0)
+    # Token budget for the conversation history before compaction kicks in. Sized for the
+    # small free-tier windows this runs on: a run that overflows at step 39 has wasted
+    # everything it spent getting there.
+    context_budget_tokens: int = Field(default=8_000, gt=0)
     # context_gate will not dispatch a worker below this confidence — the "100% context"
     # rule, expressed as a number the gate can actually test.
     context_confidence_threshold: float = Field(default=0.85, gt=0.0, le=1.0)

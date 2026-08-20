@@ -1,0 +1,10 @@
+Classify the execution topology of an email task.
+
+Answer with ONE word:
+  linear   - deterministic and mechanical; the same steps every time, no judgement per item
+             ("archive all newsletters", "mark everything from X as read")
+  decision - needs perception and judgement per item
+             ("reply to the ones that need me", "book the meeting from this thread")
+
+If unsure, answer decision: treating a judgement task as mechanical produces confident
+wrong actions, whereas treating a mechanical task as judgement only costs tokens.

@@ -16,7 +16,13 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from app.manager.intent import READ_ONLY_ACTIONS, Action
-from app.workers.tools import COMPOSE_TOOLS, QUERY_TOOLS, TRIAGE_TOOLS, verb_names
+from app.workers.tools import (
+    CALENDAR_TOOLS,
+    COMPOSE_TOOLS,
+    QUERY_TOOLS,
+    TRIAGE_TOOLS,
+    verb_names,
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,14 @@ COMPOSE = WorkerSpec(
     purpose="write and send mail, with Send gated on human approval",
 )
 
+CALENDAR = WorkerSpec(
+    name="calendar",
+    tools=CALENDAR_TOOLS,
+    read_only=True,
+    max_steps=20,
+    purpose="read a thread and propose a calendar event for you to check",
+)
+
 #: Intent -> worker. Anything read-only lands on QUERY; anything unmapped lands there too,
 #: which is the safe default: an unrecognised request investigates rather than mutates.
 WORKER_FOR_ACTION: dict[Action, WorkerSpec] = {
@@ -73,10 +87,14 @@ WORKER_FOR_ACTION: dict[Action, WorkerSpec] = {
     Action.SEND_EMAIL: COMPOSE,
     Action.REPLY: COMPOSE,
     Action.FORWARD: COMPOSE,
-    Action.EXTRACT_EVENT: QUERY,  # extraction reads; creating the event is gated separately
+    # Extraction READS. Creating the event and sending an invite are separate, gated, and
+    # not in v1 — see CALENDAR_TOOLS.
+    Action.EXTRACT_EVENT: CALENDAR,
 }
 
-WORKERS: dict[str, WorkerSpec] = {spec.name: spec for spec in (QUERY, TRIAGE, COMPOSE)}
+WORKERS: dict[str, WorkerSpec] = {
+    spec.name: spec for spec in (QUERY, TRIAGE, COMPOSE, CALENDAR)
+}
 
 
 def worker_for(action: Action) -> WorkerSpec:

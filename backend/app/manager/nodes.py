@@ -25,6 +25,7 @@ from app.manager.slots import (
     missing_slots,
     question_for,
 )
+from app.prompts import load_prompt
 from app.rules.store import RulesStore
 from app.telemetry.records import ErrorCode, StepRecord
 from app.workers.registry import worker_for
@@ -35,43 +36,7 @@ logger = logging.getLogger(__name__)
 #: typed (`CONTEXT_INCOMPLETE`) rather than pinging a human who has clearly stopped reading.
 MAX_ASKS = 3
 
-_INTAKE_SYSTEM = """You convert an email request into structured JSON.
-
-Return ONLY a JSON object:
-{"action": "<action>", "slots": {...}, "confidence": <0-1>, "constraints": [...]}
-
-READ-ONLY actions (they only look; they never change the mailbox):
-  read       open and read specific mail          slots: thread_ref, selector, query
-  summarize  digest a mailbox, label, or thread   slots: scope, thread_ref
-  search     find mail matching criteria          slots: query
-  count      how many of something                slots: scope, query
-  answer     ANY other question about the mailbox slots: query
-
-MUTATING actions:
-  send_email  slots: recipient_identity, topic, body_intent, tone, cc, subject
-  reply       slots: thread_ref, stance, body_intent, tone
-  forward     slots: thread_ref, recipient_identity
-  triage      slots: scope, aggressiveness
-  archive     slots: selector
-  label       slots: selector, target_label
-  snooze      slots: selector, until
-  extract_event slots: thread_ref
-  apply_rules slots: (none)
-
-  unknown    the request is not about email at all
-
-Choosing:
-- Prefer a READ-ONLY action whenever the user is asking rather than instructing. "What did
-  Priya say?", "anything from the bank?", "how many unread?" are all questions.
-- Use "answer" for any email question the other actions do not cover. It is the flexible
-  fallback and it is safe, because it cannot change anything.
-- Use "unknown" ONLY when the request has nothing to do with email.
-
-Slots:
-- Only fill a slot the user actually specified. NEVER invent a recipient, a subject, or a
-  body. An invented slot is worse than a missing one: a missing slot gets asked about, an
-  invented one gets acted on.
-- confidence is about the ACTION, not about how complete the slots are."""
+_INTAKE_SYSTEM = load_prompt("intake")
 
 
 def _parse_intent(raw: str) -> TaskIntent:
@@ -226,16 +191,7 @@ def build_context_gate_node(*, threshold: float = 0.85, max_asks: int = MAX_ASKS
     return context_gate
 
 
-_ROUTER_SYSTEM = """Classify the execution topology of an email task.
-
-Answer with ONE word:
-  linear   - deterministic and mechanical; the same steps every time, no judgement per item
-             ("archive all newsletters", "mark everything from X as read")
-  decision - needs perception and judgement per item
-             ("reply to the ones that need me", "book the meeting from this thread")
-
-If unsure, answer decision: treating a judgement task as mechanical produces confident
-wrong actions, whereas treating a mechanical task as judgement only costs tokens."""
+_ROUTER_SYSTEM = load_prompt("router")
 
 
 def build_router_node(llm: LLMClient, rules: RulesStore, emitter: EventEmitter | None = None):
@@ -292,8 +248,7 @@ def build_router_node(llm: LLMClient, rules: RulesStore, emitter: EventEmitter |
     return router
 
 
-_PLANNER_SYSTEM = """Given an email task, list the 3-6 steps you will take, one per line,
-no numbering and no commentary. Each step is a concrete action in a mail UI."""
+_PLANNER_SYSTEM = load_prompt("planner")
 
 
 def build_planner_node(llm: LLMClient, emitter: EventEmitter | None = None):

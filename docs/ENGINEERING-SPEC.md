@@ -50,7 +50,7 @@ drop-in. Tests use fakes that satisfy the same contract, and the graph cannot te
 `FakeEmailSurface` and `FakeLLMClient` are **test doubles only** — they never appear on a real path.
 
 ### I — Interface Segregation
-Ports stay narrow. `EmailSurface` is `observe()` + `act()`. `PiiVault` is `tokenize()` + `resolve()`.
+Ports stay narrow. `EmailSurface` is `observe()` + `act()` + `preview()` + `approve()` — the four things only an executor can do. `PiiVault` is `tokenize()` + `resolve()`.
 No consumer depends on a method it does not call. A port that grows a method used by one caller is a
 sign that caller wants its own port.
 
@@ -115,7 +115,7 @@ and repetition guards are live on every decision worker.
 | Errors | Never `except Exception: pass`. Either handle it, or map it to an `ErrorCode` and emit it. |
 | Logging | Structured, and passed through the PII redaction filter. A log line is an egress point. |
 | Comments | Explain **why**, not what. A comment that restates the code is noise; a comment that records a non-obvious constraint (a real bug you hit, a provider quirk) is the most valuable line in the file. |
-| Prompts | Live in `prompts/*.jinja2`, composed from partials. **Never** inline a multi-line prompt string in Python. |
+| Prompts | Live in `app/prompts/*.txt`, loaded by name via `load_prompt()`. **Never** inline a multi-line prompt string in Python. Plain text, not a template engine: none of them interpolate — state reaches the model as separate messages, which is what keeps the system prefix byte-stable and prompt caching working. |
 | Imports | No `import langchain` outside `llm/`. No `import playwright` outside `surface/`. Enforced by a lint rule. |
 
 ## 5. Test strategy
