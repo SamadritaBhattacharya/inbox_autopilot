@@ -155,6 +155,18 @@
       "title": "Elements",
       "type": "array"
     },
+    "hint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hint"
+    },
     "mail": {
       "anyOf": [
         {
@@ -167,7 +179,7 @@
       "default": null
     },
     "protocolVersion": {
-      "default": "1.0.0",
+      "default": "1.1.0",
       "title": "Protocolversion",
       "type": "string"
     },

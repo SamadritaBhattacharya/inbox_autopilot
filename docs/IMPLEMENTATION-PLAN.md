@@ -235,29 +235,29 @@ from the LLM.
 
 ### Tasks
 
-- [ ] **M3.1 — Worker interface + registry.** Adding a worker = a class + one registration line.
-- [ ] **M3.2 — `TriageWorker`.** `observe → reason → act` subgraph over the email verbs
+- [x] **M3.1 — Worker interface + registry.** Adding a worker = a class + one registration line.
+- [x] **M3.2 — `TriageWorker`.** `observe → reason → act` subgraph over the email verbs
       (archive, label, snooze, mark-read, read-thread).
   - *Test:* `test_triage_worker_has_no_send_tool` — gated verbs are absent from the bound schema.
-- [ ] **M3.3 — Tool specs.** Pydantic tool models with docstring descriptions, per verb, bound
+- [x] **M3.3 — Tool specs.** Pydantic tool models with docstring descriptions, per verb, bound
       natively (never free-text parsed).
-- [ ] **M3.4 — Action dispatcher.** One handler per verb; per-action timeout wall; dispatch-time
+- [x] **M3.4 — Action dispatcher.** One handler per verb; per-action timeout wall; dispatch-time
       validation (`STALE_INDEX`, `UNKNOWN_TOKEN`, `VERB_NOT_BOUND`); `undo` payload on mutating
       verbs.
-- [ ] **M3.5 — Settle + re-observe.** Adaptive per-host bound (`mean + 2σ`, clamped). Indices
+- [x] **M3.5 — Settle + re-observe.** Adaptive per-host bound (`mean + 2σ`, clamped). Indices
       rebuilt every turn.
   - *Test:* `test_indices_not_reused`.
-- [ ] **M3.6 — Loop guards.** Repetition guard (nudge 3 / kill 5), stuck-signature (nudge 2 / kill
+- [x] **M3.6 — Loop guards.** Repetition guard (nudge 3 / kill 5), stuck-signature (nudge 2 / kill
       8), runaway-output clip at ~3k chars, think-before-act, no-tool-call nudge, step budget
       injection at ≤5 remaining.
   - *Test:* one per guard, asserting the emitted `ErrorCode`.
-- [ ] **M3.7 — `EventSink` + emitter + WS hub.** Every event type in
+- [x] **M3.7 — `EventSink` + emitter + WS hub.** Every event type in
       [`WS-PROTOCOL.md §3.2`](WS-PROTOCOL.md); `astream(stream_mode="updates")` forwarding.
-- [ ] **M3.8 — Run manager.** Process-level registry keyed by `thread_id`; attach/detach/replay/GC.
+- [x] **M3.8 — Run manager.** Process-level registry keyed by `thread_id`; attach/detach/replay/GC.
       **The run outlives the socket.**
   - *Test:* disconnect mid-run → the run continues → `attach` replays the buffer and goes live.
 - [ ] **M3.9 — Screencast.** CDP frames → `frame` events.
-- [ ] **M3.10 — Next.js cockpit.** `app/run/[threadId]/page.tsx` server shell + `CockpitClient`
+- [x] **M3.10 — Next.js cockpit.** `app/run/[threadId]/page.tsx` server shell + `CockpitClient`
       (`"use client"`), `useAgentRun`, append-only `eventStore`, `Transcript`, `Viewport` (canvas),
       `QuestionCard`, `Composer`.
 
@@ -268,6 +268,42 @@ from the LLM.
 - Every guard fires under its fixture and produces its typed code.
 
 ---
+
+> **M3 note — what the first live run taught, that 375 passing tests had not.**
+>
+> A real model on a real browser found five defects the suite could not see, because tests
+> assert on final state while a cockpit watches a *stream*:
+>
+> 1. **The emitter never reached the graph.** Every node streamed into a `NullSink`; the run
+>    looked frozen until it finished. Tests passed throughout.
+> 2. **`compose_open` used `querySelector` without checking visibility.** Gmail's compose
+>    markup lives in the DOM permanently, so the agent believed compose was open on a plain
+>    inbox, forever. A hidden element has a zero-size box — measuring is the reliable test.
+> 3. **Clickable rows had no name.** `nameOf` took own-text only, so the one element you
+>    actually click rendered as `[4] generic: ""` — a number the model could not reason
+>    about. Interactive elements now fall back to subtree text.
+> 4. **`ReadThread` was bindable but not performable** — bound to the model, no handler on the
+>    surface. The model found out by calling it.
+> 5. **The surface enforced verb binding from its own timeout table**, not the worker's
+>    capability set, so a read-only run had a dispatchable `Send`. That check moved into the
+>    act node, which is the only layer that knows which worker is running.
+>
+> Two more emerged from watching the agent *reason*:
+>
+> - **`droppedCount` without a direction is half a fix.** Told "12 more items", the agent
+>   scrolled down, saw the number unchanged, and scrolled down again. `Observation.hint` now
+>   says "5 above, 7 below" (protocol 1.1.0) — and the agent immediately scrolled the right
+>   way.
+> - **Repeatable verbs can still oscillate.** Scroll-down/scroll-up/scroll-down is a loop
+>   built entirely of actions the repetition guard exempts, and the page genuinely changes
+>   each step so the stuck guard misses it too. Added an oscillation guard: a short cycle
+>   over ≤2 distinct actions nudges, then terminates `STUCK`.
+>
+> And one regression **I introduced and the suite caught only because I re-ran the probe**:
+> folding sender chips into their rows removed the only structured occurrence of a name, so
+> person registration never saw it and names stopped being tokenized. Registration now runs
+> over the raw element set before any stage can prune — *pruning decides what the model
+> sees, never what the vault knows.*
 
 ## M4 — ComposeWorker and the approval gate
 

@@ -61,7 +61,7 @@ EXTRACT_JS = """
     return 'generic';
   }
 
-  function nameOf(el) {
+  function nameOf(el, interactiveHint) {
     const aria = el.getAttribute('aria-label');
     if (aria) return aria.trim();
     // A person's display name, not the address: the address is matched by pattern anyway,
@@ -74,8 +74,8 @@ EXTRACT_JS = """
     if (title) return title.trim();
     const placeholder = el.getAttribute('placeholder');
     if (placeholder) return placeholder.trim();
-    // Own text only. Inheriting descendant text makes every ancestor look identical to its
-    // subtree, which is precisely the noise wrapper-collapse exists to remove.
+    // Own text first. Inheriting descendant text makes every ancestor look identical to its
+    // subtree, which is the noise wrapper-collapse exists to remove.
     let own = '';
     for (const node of el.childNodes) {
       if (node.nodeType === 3) own += node.textContent;
@@ -83,6 +83,15 @@ EXTRACT_JS = """
     own = own.replace(/\\s+/g, ' ').trim();
     if (own) return own;
     if (el.children.length === 0) return (el.textContent || '').replace(/\\s+/g, ' ').trim();
+
+    // An INTERACTIVE element with no own text is the case that matters: a clickable mail row
+    // whose sender and subject live in child spans. Listing it as `[4] generic: ""` gives the
+    // model a number it cannot reason about — it can see the row exists and not what it is.
+    // Falling back to subtree text only here keeps the ancestor noise away while making the
+    // one element you actually click nameable.
+    if (interactiveHint) {
+      return (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 200);
+    }
     return '';
   }
 
@@ -112,9 +121,9 @@ EXTRACT_JS = """
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     const role = roleOf(el);
-    const name = nameOf(el);
-    const value = valueOf(el);
     const interactive = isInteractive(el, role);
+    const name = nameOf(el, interactive);
+    const value = valueOf(el);
 
     // Nothing to click and nothing to read: not a candidate, and carrying it would only
     // spend budget the funnel needs for elements that matter.
@@ -157,11 +166,18 @@ EXTRACT_JS = """
     });
   }
 
-  // Gmail's compose panel is a dialog; its presence is the difference between "reading the
-  // inbox" and "writing an email", which changes what the agent should do next.
-  const composeOpen = !!document.querySelector(
+  // Gmail's compose panel is a dialog; whether it is OPEN is the difference between
+  // "reading the inbox" and "writing an email".
+  //
+  // `querySelector` alone is wrong here, and wrong in the direction that matters: the
+  // compose markup sits in the DOM permanently, hidden by an ancestor, so a presence check
+  // reports "compose is open" on a plain inbox forever. A hidden element has a zero-size
+  // box — including when the ancestor is what hides it — so measuring is the reliable test.
+  const composeEl = document.querySelector(
     '[role="dialog"] [name="subjectbox"], [role="dialog"] [g_editable="true"], dialog[open]'
   );
+  const composeBox = composeEl ? composeEl.getBoundingClientRect() : null;
+  const composeOpen = !!composeBox && composeBox.width > 0 && composeBox.height > 0;
 
   return {
     elements: out,
@@ -220,9 +236,16 @@ def detect_view(url: str, compose_open: bool) -> str:
     ):
         if fragment in lowered:
             return view
-    # A thread URL carries a message id after the label: #inbox/<hex>
-    tail = lowered.rsplit("#", 1)[-1]
-    if "/" in tail and len(tail.rsplit("/", 1)[-1]) >= 8:
+    # A thread URL carries a message id after the label: #inbox/<hex>.
+    #
+    # The fragment check is required, not incidental. Without it any path-shaped URL looks
+    # like a thread — a plain `file:///…/inbox.html` was classified as "thread" because the
+    # last path segment happened to be long enough. Gmail puts the message id in the
+    # fragment, so no fragment means no thread.
+    if "#" not in lowered:
+        return "inbox"
+    fragment = lowered.rsplit("#", 1)[-1]
+    if "/" in fragment and len(fragment.rsplit("/", 1)[-1]) >= 8:
         return "thread"
     return "inbox"
 

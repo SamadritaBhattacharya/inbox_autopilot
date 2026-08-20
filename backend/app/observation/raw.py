@@ -110,12 +110,17 @@ class FunnelReport:
 
     extracted: int = 0
     hidden: int = 0  # not rendered at all
-    offscreen: int = 0  # rendered, but outside the viewport — the agent can scroll to these
+    offscreen_above: int = 0  # scrolled past; reachable by scrolling UP
+    offscreen_below: int = 0  # not yet reached; reachable by scrolling DOWN
     occluded: int = 0  # covered by something on top
     collapsed: int = 0  # layout wrappers folded into their meaningful child
     budget_dropped: int = 0  # cut to fit the token budget
     shown: int = 0
     stages: list[str] = field(default_factory=list)
+
+    @property
+    def offscreen(self) -> int:
+        return self.offscreen_above + self.offscreen_below
 
     @property
     def reachable_but_unlisted(self) -> int:
@@ -125,4 +130,4 @@ class FunnelReport:
         counted: they are not actionable, so reporting them would just teach the agent to
         scroll after content that does not exist.
         """
-        return self.offscreen + self.budget_dropped
+        return self.offscreen_above + self.offscreen_below + self.budget_dropped

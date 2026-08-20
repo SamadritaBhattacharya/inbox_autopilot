@@ -100,10 +100,17 @@ class Observation(BaseModel):
     # Human-readable diff vs the previous turn ("compose panel opened"). The model gets a
     # diff AND a fresh list — never a blind full dump.
     changed: str | None = None
-    # How many elements the token budget dropped. Surfaced to the model as "N items
-    # hidden — scroll to see them". Silent truncation makes an agent confidently wrong,
-    # so this is reported even when it is inconvenient.
+    # How many elements are reachable but not listed. Silent truncation makes an agent
+    # confidently wrong, so this is reported even when it is inconvenient.
     dropped_count: int = Field(default=0, alias="droppedCount")
+    # WHERE the unlisted content is, in words the model can act on:
+    # "12 more items — 5 above, 7 below."
+    #
+    # The count alone turned out to be half a fix. An agent told only "12 more" scrolls one
+    # way, sees the number stay the same, and scrolls the same way again — observed doing
+    # exactly that, until the stuck guard killed the run. A direction converts a dead end
+    # into a decision.
+    hint: str | None = None
 
 
 class ActionCall(BaseModel):

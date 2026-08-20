@@ -35,22 +35,31 @@ class VisibilityFilter:
 
     def apply(
         self, elements: list[RawElement], meta: PageMeta
-    ) -> tuple[list[RawElement], int, int]:
-        """Returns `(kept, hidden_count, offscreen_count)`."""
+    ) -> tuple[list[RawElement], int, int, int]:
+        """Returns `(kept, hidden, offscreen_above, offscreen_below)`.
+
+        Above and below are counted separately because "there is more" without "which
+        way" is not actionable: an agent scrolls one direction, sees the count unchanged,
+        and scrolls the same way again.
+        """
         kept: list[RawElement] = []
         hidden = 0
-        offscreen = 0
+        above = 0
+        below = 0
 
         for element in elements:
             if not self._is_rendered(element):
                 hidden += 1
                 continue
             if not self._in_viewport(element, meta):
-                offscreen += 1
+                if element.bottom <= 0:
+                    above += 1
+                else:
+                    below += 1
                 continue
             kept.append(element)
 
-        return kept, hidden, offscreen
+        return kept, hidden, above, below
 
     def _is_rendered(self, element: RawElement) -> bool:
         if not element.displayed:

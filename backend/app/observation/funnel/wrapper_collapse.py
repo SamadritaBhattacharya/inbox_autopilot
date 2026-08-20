@@ -34,6 +34,7 @@ class WrapperCollapser:
             if element.parent_id is not None:
                 children_by_parent.setdefault(element.parent_id, []).append(element)
 
+        by_id = {element.node_id: element for element in elements}
         kept: list[RawElement] = []
         collapsed = 0
 
@@ -41,9 +42,33 @@ class WrapperCollapser:
             if self._is_wrapper(element, children_by_parent.get(element.node_id, [])):
                 collapsed += 1
                 continue
+            if self._is_redundant_child(element, by_id):
+                collapsed += 1
+                continue
             kept.append(element)
 
         return kept, collapsed
+
+    @staticmethod
+    def _is_redundant_child(element: RawElement, by_id: dict[int, RawElement]) -> bool:
+        """Is this inert text already readable from the clickable thing that contains it?
+
+        A mail row is one actionable unit: click the row, and the sender and subject inside
+        it are description rather than targets. Listing all three triples the tokens the row
+        costs and asks the model to choose between numbers that do the same thing — and
+        picking the inert one does nothing, which reads to the agent as a dead click.
+
+        Only inert children of an INTERACTIVE parent are folded away, and only when the
+        parent's name already contains their text, so nothing readable is lost.
+        """
+        if element.interactive or element.parent_id is None:
+            return False
+        parent = by_id.get(element.parent_id)
+        if parent is None or not parent.interactive:
+            return False
+
+        text = element.name.strip()
+        return bool(text) and text in parent.name
 
     def _is_wrapper(self, element: RawElement, children: list[RawElement]) -> bool:
         # Interactive elements are never wrappers, however plain they look — the handler

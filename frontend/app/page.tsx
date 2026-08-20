@@ -1,23 +1,30 @@
 import { PROTOCOL_VERSION } from "@inbox/contracts";
+import { StartForm } from "@/components/StartForm";
 import { env } from "@/lib/env";
 
 /**
- * Landing shell — a Server Component, and deliberately static.
+ * The landing shell — a Server Component, and deliberately static.
  *
- * The live cockpit arrives at M3 as a single client island beneath this shell. Keeping
- * everything that does not need a socket on the server is the reason this app is Next.js
- * rather than a plain SPA; if this file ever needs `"use client"`, something has been put
- * in the wrong place.
+ * Everything here renders on the server and is cached; only the small form beneath is
+ * interactive. Keeping the split at this granularity is what Next.js buys us over a plain
+ * SPA, and it is why the cockpit is one client island rather than a client application.
  */
+
+const EXAMPLES = [
+  "Summarize what's waiting in my inbox",
+  "What did Priya say about the Friday demo?",
+  "Archive all the newsletters",
+  "Draft a reply to the latest thread saying I'll get back to them Monday",
+];
 
 const PROMISES = [
   {
     title: "Won't start half-informed",
-    body: "If the task is missing something the action needs, it asks first. Nothing touches the mailbox until the context is complete.",
+    body: "If a request is missing something it needs, it asks first. Nothing touches the mailbox until the context is complete.",
   },
   {
     title: "Never sees your data",
-    body: "Addresses, phone numbers, and thread ids become tokens before anything leaves the machine holding the page. The model reasons over P17, not over your contacts.",
+    body: "Addresses, phone numbers, and thread ids become tokens before anything leaves the machine holding the page. The model reasons over P17, not your contacts.",
   },
   {
     title: "Never sends without you",
@@ -27,44 +34,42 @@ const PROMISES = [
 
 export default function Home() {
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-6 py-16">
-      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-faint">
+    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-14">
+      <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-faint">
         Browser-driven email agent
       </p>
 
-      <h1 className="mt-4 text-4xl font-semibold leading-[1.1] tracking-tight text-text sm:text-5xl">
-        Give it a task.
+      <h1 className="mt-4 text-[2.1rem] font-semibold leading-[1.1] tracking-tight text-text sm:text-[2.6rem]">
+        Ask it about your mail.
         <br />
-        <span className="text-muted">Watch it work your inbox.</span>
+        <span className="text-muted">Watch it work.</span>
       </h1>
 
-      <p className="mt-5 max-w-xl text-[15px] leading-relaxed text-muted">
+      <p className="mt-4 max-w-lg text-[14.5px] leading-relaxed text-muted">
         It reads the page, reasons one step at a time, and acts in a real browser — every
         thought and click streamed to you live.
       </p>
 
-      <ul className="mt-10 grid gap-3 sm:grid-cols-3">
+      <div className="mt-8">
+        <StartForm examples={EXAMPLES} />
+      </div>
+
+      <ul className="mt-12 grid gap-3 sm:grid-cols-3">
         {PROMISES.map((promise) => (
           <li
             key={promise.title}
             className="transition-smooth rounded-[--radius-card] border border-line bg-surface p-4 hover:border-line2 hover:bg-raised"
           >
-            <h2 className="text-sm font-medium text-text">{promise.title}</h2>
-            <p className="mt-2 text-[13px] leading-relaxed text-faint">{promise.body}</p>
+            <h2 className="text-[13px] font-medium text-text">{promise.title}</h2>
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-faint">{promise.body}</p>
           </li>
         ))}
       </ul>
 
-      <footer className="mt-12 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-5 font-mono text-[11px] text-faint">
+      <footer className="mt-10 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line pt-4 font-mono text-[10px] text-faint">
         <span>protocol v{PROTOCOL_VERSION}</span>
-        <span aria-hidden className="text-line2">
-          ·
-        </span>
+        <span aria-hidden className="text-line2">·</span>
         <span>brain {env.NEXT_PUBLIC_WS_URL}</span>
-        <span aria-hidden className="text-line2">
-          ·
-        </span>
-        <span className="text-muted">cockpit lands at M3</span>
       </footer>
     </main>
   );

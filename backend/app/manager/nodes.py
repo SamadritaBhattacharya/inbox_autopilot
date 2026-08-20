@@ -15,11 +15,19 @@ import json
 import logging
 
 from app.agent.state import AgentState
+from app.events.emitter import EventEmitter
 from app.llm.base import LLMClient, Message
 from app.manager.intent import Action, Plan, Route, TaskIntent
-from app.manager.slots import confidence, is_ready, missing_slots, question_for
+from app.manager.slots import (
+    apply_defaults,
+    confidence,
+    is_ready,
+    missing_slots,
+    question_for,
+)
 from app.rules.store import RulesStore
 from app.telemetry.records import ErrorCode, StepRecord
+from app.workers.registry import worker_for
 
 logger = logging.getLogger(__name__)
 
@@ -32,24 +40,37 @@ _INTAKE_SYSTEM = """You convert an email request into structured JSON.
 Return ONLY a JSON object:
 {"action": "<action>", "slots": {...}, "confidence": <0-1>, "constraints": [...]}
 
-action is one of: send_email, reply, triage, archive, label, snooze, search,
-extract_event, apply_rules, unknown.
+READ-ONLY actions (they only look; they never change the mailbox):
+  read       open and read specific mail          slots: thread_ref, selector, query
+  summarize  digest a mailbox, label, or thread   slots: scope, thread_ref
+  search     find mail matching criteria          slots: query
+  count      how many of something                slots: scope, query
+  answer     ANY other question about the mailbox slots: query
 
-Slot names by action:
-  send_email    recipient_identity, topic, body_intent, tone, cc, subject
-  reply         thread_ref, stance, body_intent, tone
-  triage        scope, aggressiveness
-  archive       selector
-  label         selector, target_label
-  snooze        selector, until
-  search        query
-  extract_event thread_ref
+MUTATING actions:
+  send_email  slots: recipient_identity, topic, body_intent, tone, cc, subject
+  reply       slots: thread_ref, stance, body_intent, tone
+  forward     slots: thread_ref, recipient_identity
+  triage      slots: scope, aggressiveness
+  archive     slots: selector
+  label       slots: selector, target_label
+  snooze      slots: selector, until
+  extract_event slots: thread_ref
+  apply_rules slots: (none)
 
-Rules:
+  unknown    the request is not about email at all
+
+Choosing:
+- Prefer a READ-ONLY action whenever the user is asking rather than instructing. "What did
+  Priya say?", "anything from the bank?", "how many unread?" are all questions.
+- Use "answer" for any email question the other actions do not cover. It is the flexible
+  fallback and it is safe, because it cannot change anything.
+- Use "unknown" ONLY when the request has nothing to do with email.
+
+Slots:
 - Only fill a slot the user actually specified. NEVER invent a recipient, a subject, or a
   body. An invented slot is worse than a missing one: a missing slot gets asked about, an
   invented one gets acted on.
-- Use "unknown" when the request is not about email.
 - confidence is about the ACTION, not about how complete the slots are."""
 
 
@@ -96,7 +117,7 @@ def _parse_intent(raw: str) -> TaskIntent:
     )
 
 
-def build_intake_node(llm: LLMClient):
+def build_intake_node(llm: LLMClient, emitter: EventEmitter | None = None):
     """NL task -> typed `TaskIntent`. No side effects, no mailbox access."""
 
     async def intake(state: AgentState) -> dict:
@@ -110,6 +131,12 @@ def build_intake_node(llm: LLMClient):
         intent = _parse_intent(result.text or result.reasoning)
 
         logger.info("intake: %s (confidence %.2f)", intent.action, intent.action_confidence)
+        if emitter is not None:
+            # The cockpit shows "I understood this as…" before anything happens, so a
+            # misread is caught by the human at second zero rather than at step twelve.
+            await emitter.intent(
+                intent.action.value, intent.slots, intent.action_confidence
+            )
         return {
             "intent": intent,
             "missing_slots": missing_slots(intent),
@@ -155,12 +182,22 @@ def build_context_gate_node(*, threshold: float = 0.85, max_asks: int = MAX_ASKS
         score = confidence(intent)
 
         if is_ready(intent, threshold=threshold):
-            logger.info("context gate cleared (confidence %.2f)", score)
+            # Defaults are folded in permanently once the gate clears, so the worker sees
+            # the same intent the gate approved rather than re-deriving it.
+            intent = apply_defaults(intent)
+            worker = worker_for(intent.action)
+            logger.info(
+                "context gate cleared (confidence %.2f) -> %s worker%s",
+                score,
+                worker.name,
+                " [read-only]" if worker.read_only else "",
+            )
             return {
                 "intent": intent,
                 "missing_slots": [],
                 "pending_question": None,
                 "status": "running",
+                "active_worker": worker.name,
             }
 
         if state.ask_count >= max_asks:
@@ -201,7 +238,7 @@ If unsure, answer decision: treating a judgement task as mechanical produces con
 wrong actions, whereas treating a mechanical task as judgement only costs tokens."""
 
 
-def build_router_node(llm: LLMClient, rules: RulesStore):
+def build_router_node(llm: LLMClient, rules: RulesStore, emitter: EventEmitter | None = None):
     """Linear vs decision (R6).
 
     A deterministic rule match short-circuits the classifier entirely — the cheapest correct
@@ -214,6 +251,8 @@ def build_router_node(llm: LLMClient, rules: RulesStore):
         matched = rules.match(state.task, intent.action.value)
         if matched is not None:
             logger.info("router: rule %r matched — linear, no classifier call", matched.name)
+            if emitter is not None:
+                await emitter.route("linear", f"matched rule {matched.name!r}", True)
             return {
                 "route": Route(
                     topology="linear",
@@ -233,6 +272,8 @@ def build_router_node(llm: LLMClient, rules: RulesStore):
         answer = (result.text or result.reasoning).strip().lower()
         topology = "linear" if answer.startswith("linear") else "decision"
 
+        if emitter is not None:
+            await emitter.route(topology, f"classifier said {answer[:40]!r}", False)
         return {
             "route": Route(topology=topology, why=f"classifier said {answer[:40]!r}"),
             "status": "running",
@@ -255,7 +296,7 @@ _PLANNER_SYSTEM = """Given an email task, list the 3-6 steps you will take, one 
 no numbering and no commentary. Each step is a concrete action in a mail UI."""
 
 
-def build_planner_node(llm: LLMClient):
+def build_planner_node(llm: LLMClient, emitter: EventEmitter | None = None):
     """Post intent to the cockpit before acting (decision route only).
 
     A plan is not a script the loop must follow — it exists so a human sees what the agent
@@ -277,6 +318,8 @@ def build_planner_node(llm: LLMClient):
             if line.strip()
         ][:6]
 
+        if emitter is not None:
+            await emitter.plan(steps)
         return {
             "plan": Plan(steps=steps, rationale=result.explanation[:300]),
             "history": [

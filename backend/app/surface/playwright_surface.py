@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 TIMEOUTS: dict[str, float] = {
     "Navigate": 30.0,
     "Click": 10.0,
+    "ReadThread": 10.0,
     "Type": 10.0,
     "Clear": 5.0,
     "PressKey": 5.0,
@@ -162,6 +163,22 @@ class PlaywrightEmailSurface:
                 error_code="VERB_NOT_BOUND",
             )
         return await handler(action)
+
+    async def _do_readthread(self, action: ResolvedAction) -> ActionResult:
+        """Open a thread — which, on a mail surface, is a click on its row.
+
+        Bound as its own verb because "read this thread" is what the model means, and making
+        it say `Click` for that loses the intent from the trajectory. Without a handler here
+        the tool was bindable but not performable, which the model discovered the hard way.
+        """
+        if action.point is None:
+            return ActionResult(success=False, reason="ReadThread needs an index")
+        x, y = action.point
+        await self._page.mouse.move(x, y)
+        await self._page.mouse.click(x, y)
+        return ActionResult(
+            success=True, reason=f"opened thread [{action.call.args.get('index')}]"
+        )
 
     async def _do_click(self, action: ResolvedAction) -> ActionResult:
         if action.point is None:

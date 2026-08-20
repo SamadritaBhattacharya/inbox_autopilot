@@ -6,16 +6,33 @@ LLM calls, no browser control lives here — those go through ports, wired in
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from inbox_contracts import PROTOCOL_VERSION
 
+from app.api.ws import RUNS, ws_run
 from app.config.settings import get_settings
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Tear down live runs and their browsers on shutdown.
+
+    Without this a redeploy leaks a Chromium process per in-flight run, and nothing else in
+    the system is positioned to notice.
+    """
+    yield
+    await RUNS.shutdown()
+
 
 app = FastAPI(
     title="Inbox Autopilot",
     version="0.1.0",
     description="Browser-driven email agent — the brain.",
+    lifespan=lifespan,
 )
 
 # The cockpit is deployed separately (Vercel) and connects straight to this host: a
@@ -45,4 +62,15 @@ async def health() -> dict[str, object]:
         "status": "ok",
         "protocolVersion": PROTOCOL_VERSION,
         "emailSurface": settings.email_surface,
+        "activeRuns": len(RUNS.thread_ids()),
     }
+
+
+@app.websocket("/ws/run")
+async def run_socket(websocket: WebSocket) -> None:
+    """The cockpit connection: start a run, watch it, steer it, stop it.
+
+    A disconnect detaches the view; the run continues and can be re-attached by
+    `thread_id`. See `app.api.ws` and `docs/WS-PROTOCOL.md`.
+    """
+    await ws_run(websocket)

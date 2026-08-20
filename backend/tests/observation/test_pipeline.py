@@ -77,6 +77,22 @@ def test_the_meaning_survives_tokenization(funnel):
     assert "Compose" in names
 
 
+def test_a_name_survives_its_own_element_being_pruned(funnel):
+    """Registration must not depend on what later stages keep.
+
+    A regression this suite previously missed: wrapper-collapse folded the sender chip into
+    its clickable row, so the only structured occurrence of the name disappeared before the
+    tokenizer ran — and every mention of that person downstream stayed in the clear. Pruning
+    decides what the model SEES, never what the vault KNOWS.
+    """
+    row = element(1, role="listitem", name="Priya Nair - Friday demo", y=10, interactive=True)
+    chip = element(2, role="sender", name="Priya Nair", y=10, parent_id=1)
+
+    observation, _, _ = funnel.run([row, chip], meta())
+
+    assert "Priya Nair" not in observation.model_dump_json()
+
+
 def test_the_same_person_gets_one_token_across_rows(funnel):
     """Otherwise the model reasons about one human as two."""
     observation, _, _ = funnel.run(

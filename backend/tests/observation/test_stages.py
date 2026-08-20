@@ -15,38 +15,47 @@ VIEWPORT_AREA = float(VIEWPORT_W * VIEWPORT_H)
 
 
 def test_undisplayed_elements_are_hidden_not_offscreen():
-    kept, hidden, offscreen = VisibilityFilter().apply(
+    kept, hidden, above, below = VisibilityFilter().apply(
         [element(1, displayed=False), element(2, name="real")], meta()
     )
     assert [e.node_id for e in kept] == [2]
-    assert (hidden, offscreen) == (1, 0)
+    assert (hidden, above, below) == (1, 0, 0)
 
 
 def test_zero_size_elements_are_dropped():
-    kept, hidden, _ = VisibilityFilter().apply([element(1, width=0, height=0)], meta())
+    kept, hidden, _, _ = VisibilityFilter().apply([element(1, width=0, height=0)], meta())
     assert kept == []
     assert hidden == 1
 
 
 def test_offscreen_is_counted_separately_because_the_agent_can_scroll_there():
     """Conflating the two would send the agent scrolling after content that isn't there."""
-    kept, hidden, offscreen = VisibilityFilter().apply(
+    kept, hidden, above, below = VisibilityFilter().apply(
         [element(1, y=VIEWPORT_H + 500), element(2, y=100)], meta()
     )
     assert [e.node_id for e in kept] == [2]
-    assert (hidden, offscreen) == (0, 1)
+    assert (hidden, above, below) == (0, 0, 1)
 
 
 def test_an_element_peeking_into_the_viewport_survives():
     """Otherwise the list flickers as the page settles by a pixel."""
-    kept, _, _ = VisibilityFilter().apply([element(1, y=VIEWPORT_H - 2, height=40)], meta())
+    kept, _, _, _ = VisibilityFilter().apply([element(1, y=VIEWPORT_H - 2, height=40)], meta())
     assert len(kept) == 1
 
 
-def test_elements_scrolled_above_the_viewport_are_offscreen():
-    kept, _, offscreen = VisibilityFilter().apply([element(1, y=-300, height=40)], meta())
+def test_content_scrolled_past_is_reported_as_ABOVE():
+    """Direction is what makes the count actionable — without it the agent scrolls the
+    wrong way, sees the number unchanged, and scrolls the wrong way again."""
+    kept, _, above, below = VisibilityFilter().apply([element(1, y=-300, height=40)], meta())
     assert kept == []
-    assert offscreen == 1
+    assert (above, below) == (1, 0)
+
+
+def test_content_not_yet_reached_is_reported_as_BELOW():
+    _, _, above, below = VisibilityFilter().apply(
+        [element(1, y=VIEWPORT_H + 300, height=40)], meta()
+    )
+    assert (above, below) == (0, 1)
 
 
 # ── stage 3: occlusion ──────────────────────────────────────────────────────

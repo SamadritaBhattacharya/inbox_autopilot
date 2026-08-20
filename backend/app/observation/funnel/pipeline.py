@@ -28,6 +28,29 @@ from app.security.tokenizer import PiiTokenizer
 
 logger = logging.getLogger(__name__)
 
+
+def _scroll_hint(report: FunnelReport) -> str | None:
+    """Where the unlisted content is, in words the model can act on.
+
+    "12 more items" alone is not actionable — an agent scrolls one way, sees the number
+    unchanged, and scrolls the same way again. Naming the direction turns a dead end into
+    a decision.
+    """
+    total = report.reachable_but_unlisted
+    if total <= 0:
+        return None
+
+    parts: list[str] = []
+    if report.offscreen_above:
+        parts.append(f"{report.offscreen_above} above")
+    if report.offscreen_below:
+        parts.append(f"{report.offscreen_below} below")
+    if report.budget_dropped:
+        parts.append(f"{report.budget_dropped} trimmed to fit")
+
+    where = ", ".join(parts) if parts else "elsewhere on the page"
+    return f"{total} more item{'' if total == 1 else 's'} not shown: {where}."
+
 #: The canonical order. Asserted by test; changing it changes the security properties.
 STAGE_ORDER: tuple[str, ...] = (
     "extract",
@@ -93,7 +116,18 @@ class ObservationFunnel:
     ) -> tuple[Observation, dict[int, tuple[float, float]], FunnelReport]:
         report = FunnelReport(extracted=len(elements), stages=list(STAGE_ORDER))
 
-        visible, report.hidden, report.offscreen = self._visibility.apply(elements, meta)
+        # Learn people from the RAW element set, before any stage can prune it.
+        #
+        # This ran inside the tokenize stage once, and it was a latent leak: a later stage
+        # (wrapper collapse folding a sender chip into its row) removed the only structured
+        # occurrence of a name, so the name was never registered and every mention of it
+        # downstream stayed in the clear. Registration must not depend on what survives —
+        # pruning decides what the model SEES, never what the vault KNOWS.
+        self._register_people(elements)
+
+        visible, report.hidden, report.offscreen_above, report.offscreen_below = (
+            self._visibility.apply(elements, meta)
+        )
 
         viewport_area = float(meta.viewport_width * meta.viewport_height)
         unoccluded, report.occluded = self._occlusion.apply(visible, viewport_area)
@@ -140,6 +174,7 @@ class ObservationFunnel:
             screenshotRef=screenshot_ref,
             changed=changed,
             droppedCount=report.reachable_but_unlisted,
+            hint=_scroll_hint(report),
         )
 
         logger.debug(
@@ -149,18 +184,19 @@ class ObservationFunnel:
         )
         return observation, geometry, report
 
-    def _tokenize(self, elements: list[RawElement]) -> list[RawElement]:
-        """Rewrite every name and value through the vault.
+    def _register_people(self, elements: list[RawElement]) -> None:
+        """Teach the vault every structured name on the page, before anything is pruned.
 
-        Structured names are registered first, in a separate pass. A sender's display name
-        met on row 40 must already be known when row 1 is tokenized, or the same person
-        would appear as a token in one row and as plain text in another — and the model
-        would reason about them as two different people.
+        A whole pass of its own because a sender's display name met on row 40 must already
+        be known when row 1 is tokenized — otherwise one person appears as a token in one
+        row and as plain text in another, and the model reasons about them as two people.
         """
         for element in elements:
             if self._is_person_field(element):
                 self._tokenizer.register_person(element.name)
 
+    def _tokenize(self, elements: list[RawElement]) -> list[RawElement]:
+        """Rewrite every name and value through the vault."""
         return [
             replace(
                 element,

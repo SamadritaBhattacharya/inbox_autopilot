@@ -19,16 +19,23 @@ eventually force a real browser into a unit test.
 """
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from app.config.settings import Settings, get_settings
+from app.feedback.store import FeedbackStore, InMemoryFeedbackStore
 from app.llm.base import LLMClient
 from app.llm.providers import build_llm_client
 from app.llm.usage import UsageTracker
+from app.rules.store import InMemoryRulesStore, RulesStore
 from app.security.redaction import install_redaction
 from app.security.tokenizer import PiiTokenizer
 from app.security.vault import SessionPiiVault
+from app.surface.base import EmailSurface
 from app.telemetry.store import InMemoryTrajectoryStore, TrajectoryStore
+
+#: How to release a per-run resource (a browser) when the run ends.
+Closer = Callable[[], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,65 @@ class AppContainer:
     trajectory: TrajectoryStore
     usage: UsageTracker
     llm: LLMClient | None
+    rules: RulesStore
+    feedback: FeedbackStore
+    surface: EmailSurface | None = None
+
+    async def new_surface(self) -> tuple[EmailSurface | None, Closer]:
+        """A browser for ONE run, plus how to close it.
+
+        Per run, never per process — a surface is one browser session, and sharing it would
+        mean two users driving the same page. Same reason the vault is per session: both are
+        session-scoped by nature, and treating either as a singleton is a correctness bug
+        that only shows up under concurrency.
+
+        Returns `(None, noop)` for the fake surface, which is what keeps the whole test
+        pyramid browser-free.
+        """
+
+        async def noop() -> None:
+            return None
+
+        if self.surface is not None:
+            return self.surface, noop  # injected by a test or a caller; not ours to close
+
+        if self.settings.email_surface != "playwright":
+            return None, noop
+
+        from app.surface.playwright_surface import launch_surface
+
+        security = self.new_session_security()
+        surface, close = await launch_surface(
+            headless=self.settings.cdp_headless,
+            start_url=self.settings.start_url,
+            vault=security.vault,
+            tokenizer=security.tokenizer,
+        )
+        return surface, close
+
+    def build_graph(
+        self,
+        *,
+        emitter=None,
+        feedback: FeedbackStore | None = None,
+        surface: EmailSurface | None = None,
+    ):
+        """Compile a graph from the wired ports.
+
+        Built per run rather than once: a graph closes over a surface, and a surface is one
+        browser session. Sharing one across runs would mean two users driving the same page.
+        """
+        from app.agent.graph import build_manager_graph
+
+        return build_manager_graph(
+            llm=self.require_llm(),
+            surface=surface if surface is not None else self.surface,
+            emitter=emitter,
+            rules=self.rules,
+            feedback=feedback or self.feedback,
+            threshold=self.settings.context_confidence_threshold,
+            max_steps=self.settings.max_steps,
+        )
 
     def require_llm(self) -> LLMClient:
         """The LLM, or a clear explanation of why there isn't one.
@@ -87,6 +153,9 @@ def build_container(
     llm: LLMClient | None = None,
     trajectory: TrajectoryStore | None = None,
     usage: UsageTracker | None = None,
+    rules: RulesStore | None = None,
+    feedback: FeedbackStore | None = None,
+    surface: EmailSurface | None = None,
 ) -> AppContainer:
     """Wire the application. No logic, no branching beyond selection.
 
@@ -111,4 +180,7 @@ def build_container(
         trajectory=trajectory or InMemoryTrajectoryStore(),
         usage=usage,
         llm=llm,
+        rules=rules or InMemoryRulesStore(),
+        feedback=feedback or InMemoryFeedbackStore(),
+        surface=surface,
     )

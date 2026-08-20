@@ -17,6 +17,9 @@ ROUTER = "router"
 LINEAR = "linear"
 PLANNER = "planner"
 DISPATCH = "dispatch"
+OBSERVE = "observe"
+REASON = "reason"
+ACT = "act"
 FINALIZE = "finalize"
 
 
@@ -44,4 +47,31 @@ def route_after_router(state: AgentState) -> str:
 
 
 def route_after_dispatch(state: AgentState) -> str:
-    return FINALIZE if state.finished else DISPATCH
+    """Into the loop, unless dispatch already resolved the run."""
+    return FINALIZE if state.finished or state.is_terminal else OBSERVE
+
+
+def route_after_observe(state: AgentState) -> str:
+    """A surface that died mid-run ends things; otherwise think about what we see."""
+    return FINALIZE if state.is_terminal else REASON
+
+
+def route_after_reason(state: AgentState) -> str:
+    """Act on the chosen tool, or finish.
+
+    A turn with no `last_action` is the nudge path — the model produced prose instead of a
+    tool call and gets one more chance. Sending it to `act` would dispatch whatever action
+    the PREVIOUS turn chose, which is how an agent silently repeats itself.
+    """
+    if state.is_terminal or state.finished:
+        return FINALIZE
+    return ACT if state.last_action is not None else REASON
+
+
+def route_after_act(state: AgentState) -> str:
+    """Re-observe from scratch, unless the run is over.
+
+    Always back to `observe`, never straight to `reason`. Acting on a stale observation is
+    the single most reliable way to click the wrong thing.
+    """
+    return FINALIZE if state.finished or state.is_terminal else OBSERVE

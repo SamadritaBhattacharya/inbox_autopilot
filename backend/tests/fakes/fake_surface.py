@@ -24,6 +24,7 @@ def observation(
     title: str = "Inbox",
     view: str = "inbox",
     dropped: int = 0,
+    hint: str | None = None,
     changed: str | None = None,
     compose_open: bool = False,
 ) -> Observation:
@@ -36,6 +37,7 @@ def observation(
         mail=MailContext(view=view, composeOpen=compose_open),
         changed=changed,
         droppedCount=dropped,
+        hint=hint,
     )
 
 
