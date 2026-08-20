@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useEffect, useRef } from "react";
 import { useAgentRun } from "@/lib/useAgentRun";
+import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
+import { OptionsCard } from "./OptionsCard";
 import { QuestionCard } from "./QuestionCard";
 import { Transcript } from "./Transcript";
 import { Viewport } from "./Viewport";
@@ -17,13 +19,27 @@ import { Viewport } from "./Viewport";
  * benefit is quietly gone.
  */
 export function CockpitClient({ threadId, task }: { threadId: string; task?: string }) {
-  const { timeline, question, usage, status, connected, absent, answer, feedback, stop, subscribeFrame } =
-    useAgentRun(threadId, task);
+  const {
+    timeline,
+    question,
+    approval,
+    usage,
+    status,
+    connected,
+    absent,
+    answer,
+    decide,
+    choose,
+    options,
+    feedback,
+    stop,
+    subscribeFrame,
+  } = useAgentRun(threadId, task);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [timeline, question]);
+  }, [timeline, question, approval, options]);
 
   const lastAction = [...timeline].reverse().find((entry) => entry.kind === "action");
   const currentAction = lastAction?.kind === "action" ? lastAction.name : undefined;
@@ -79,6 +95,8 @@ export function CockpitClient({ threadId, task }: { threadId: string; task?: str
         <div className="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pt-3">
           <Transcript timeline={timeline} />
           {question && <QuestionCard question={question} onAnswer={answer} />}
+          {approval && <ApprovalCard approval={approval} onDecide={decide} />}
+          {options && <OptionsCard options={options} onChoose={choose} />}
           <div ref={bottomRef} className="h-3" />
         </div>
 

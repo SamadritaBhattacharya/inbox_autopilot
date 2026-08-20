@@ -141,6 +141,29 @@ function EntryRow({ entry }: { entry: Entry }) {
         </Row>
       );
 
+    case "decision":
+      return (
+        <Row label="you">
+          <span className={entry.verdict === "approve" ? "text-good" : "text-muted"}>
+            {entry.verdict === "approve"
+              ? "approved it"
+              : entry.verdict === "edit"
+                ? "asked for a change"
+                : "declined"}
+          </span>
+        </Row>
+      );
+
+    case "diagnosis":
+      return (
+        <Row label="why">
+          <span className="text-text">{entry.plain}</span>
+          {entry.evidence && (
+            <span className="mt-0.5 block font-mono text-[11px] text-faint">{entry.evidence}</span>
+          )}
+        </Row>
+      );
+
     case "feedback":
       return (
         <Row label="you said">

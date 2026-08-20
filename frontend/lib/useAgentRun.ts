@@ -8,6 +8,9 @@ import {
   str,
   type AgentEvent,
   type Entry,
+  type Choice,
+  type PendingApproval,
+  type PendingOptions,
   type PendingQuestion,
   type RunStatus,
   type UsageTotals,
@@ -85,7 +88,7 @@ export function useAgentRun(threadId: string, task?: string) {
 
       setEvents((previous) => [...previous, frame]);
 
-      if (frame.event === "question") setStatus("awaiting");
+      if (["question", "approval_request", "options"].includes(frame.event)) setStatus("awaiting");
       else if (frame.event === "run_complete") setStatus("done");
       else if (frame.event === "finalize") setStatus(bool(frame.data.success) ? "done" : "failed");
       else if (frame.event === "status") {
@@ -110,14 +113,47 @@ export function useAgentRun(threadId: string, task?: string) {
     [send],
   );
 
+  const decide = useCallback(
+    (verdict: "approve" | "edit" | "reject", edit?: string) => {
+      send({ type: "decision", verdict, edit: edit ?? "" });
+      setStatus("running");
+    },
+    [send],
+  );
+
+  const choose = useCallback(
+    (option: number, text?: string) => {
+      send({ type: "choice", option, text: text ?? "" });
+      setStatus("running");
+    },
+    [send],
+  );
+
   const feedback = useCallback((text: string) => send({ type: "feedback", text }), [send]);
   const stop = useCallback(() => send({ type: "stop" }), [send]);
 
   const timeline = useMemo(() => toTimeline(events, task), [events, task]);
   const question = useMemo(() => latestQuestion(events), [events]);
+  const approval = useMemo(() => latestApproval(events), [events]);
+  const options = useMemo(() => latestOptions(events), [events]);
   const usage = useMemo(() => totalUsage(events), [events]);
 
-  return { timeline, question, usage, status, connected, absent, answer, feedback, stop, subscribeFrame };
+  return {
+    timeline,
+    question,
+    approval,
+    usage,
+    status,
+    connected,
+    absent,
+    answer,
+    decide,
+    choose,
+    options,
+    feedback,
+    stop,
+    subscribeFrame,
+  };
 }
 
 /** Events -> rendered rows. Pure, so replay and live cannot diverge. */
@@ -183,6 +219,16 @@ function toTimeline(events: AgentEvent[], task?: string): Entry[] {
       case "feedback_ack":
         entries.push({ kind: "feedback", text: str(data.text) });
         break;
+      case "approval_result":
+        entries.push({ kind: "decision", verdict: str(data.verdict) });
+        break;
+      case "diagnosis":
+        entries.push({
+          kind: "diagnosis",
+          plain: str(data.plain),
+          evidence: str(data.evidence),
+        });
+        break;
       case "error":
         entries.push({
           kind: "error",
@@ -217,6 +263,51 @@ function latestQuestion(events: AgentEvent[]): PendingQuestion | null {
       };
     } else if (event === "reasoning" || event === "run_complete" || event === "finalize") {
       // Anything that means the run moved on answers it.
+      pending = null;
+    }
+  }
+  return pending;
+}
+
+/** The approval still waiting, if any. Cleared by its own result event. */
+function latestApproval(events: AgentEvent[]): PendingApproval | null {
+  let pending: PendingApproval | null = null;
+  for (const { event, data } of events) {
+    if (event === "approval_request") {
+      pending = {
+        requestId: str(data.requestId),
+        kind: str(data.kind, "bulk"),
+        summary: str(data.summary),
+        preview: str(data.preview),
+        expiresAt: str(data.expiresAt),
+      };
+    } else if (event === "approval_result" || event === "run_complete") {
+      pending = null;
+    }
+  }
+  return pending;
+}
+
+/** The recovery options still open, if any. Needs the diagnosis that preceded them. */
+function latestOptions(events: AgentEvent[]): PendingOptions | null {
+  let diagnosis = { cause: "", plain: "", evidence: "" };
+  let pending: PendingOptions | null = null;
+
+  for (const { event, data } of events) {
+    if (event === "diagnosis") {
+      diagnosis = {
+        cause: str(data.cause),
+        plain: str(data.plain),
+        evidence: str(data.evidence),
+      };
+    } else if (event === "options") {
+      pending = {
+        requestId: str(data.requestId),
+        ...diagnosis,
+        choices: (data.options as Choice[]) ?? [],
+      };
+    } else if (event === "reasoning" || event === "run_complete" || event === "finalize") {
+      // Anything that means the run moved on has answered them.
       pending = null;
     }
   }

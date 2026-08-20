@@ -49,6 +49,14 @@ class AgentState(BaseModel):
     last_action: ActionCall | None = None
     last_result: ActionResult | None = None
 
+    # ── POST ────────────────────────────────────────────────────────────────
+    diagnosis: object | None = None
+    #: Causes already remediated in this run, and the strategies already tried.
+    #: Self-heal must terminate: without these the loop can offer the move that just
+    #: failed, forever.
+    remedied_causes: Annotated[list[str], operator.add] = Field(default_factory=list)
+    tried_strategies: Annotated[list[str], operator.add] = Field(default_factory=list)
+
     # ── control ─────────────────────────────────────────────────────────────
     status: Status = "gathering"
     error_code: ErrorCode | None = None

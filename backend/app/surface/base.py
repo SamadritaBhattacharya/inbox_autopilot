@@ -44,3 +44,27 @@ class EmailSurface(Protocol):
         the wire, and only at this moment.
         """
         ...
+
+    def approve(self, fingerprint: str) -> None:
+        """Record a human decision authorizing ONE exact payload.
+
+        On the port because the executor is what dispatches, so the executor is what must
+        hold the authorization — a check enforced anywhere else could be routed around by
+        anything that reaches `act()` directly.
+
+        Only the approval gate may call this. A remediation strategy or rule able to approve
+        on the user's behalf would make the whole gate decorative.
+        """
+        ...
+
+    async def preview(self, call: ActionCall) -> str:
+        """A human-readable, RESOLVED description of what `call` is about to do.
+
+        The third method, and it earns its place: an approval card showing "send to P17" is
+        useless — verifying the recipient is the entire point of the gate, and only this
+        side of the wire can turn a token back into a name. Asking the brain to render the
+        preview would mean giving the brain the vault.
+
+        Read-only. The result travels to the authenticated cockpit and nowhere else.
+        """
+        ...

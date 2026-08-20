@@ -61,6 +61,31 @@ DEFAULT_TIMEOUT = 10.0
 SETTLE_MIN = 0.25
 SETTLE_MAX = 3.0
 
+#: Reads the live compose fields for the approval preview. Selectors cover Gmail's real
+#: markup and the ordinary semantics a normal mail form uses.
+_COMPOSE_FIELDS_JS = """
+() => {
+  const pick = (selectors) => {
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      if (!el) continue;
+      const value = ('value' in el ? el.value : el.textContent) || '';
+      if (value.trim()) return value.trim();
+    }
+    return '';
+  };
+  return {
+    to: pick(['[name="to"]', 'textarea[name="to"]', '[aria-label*="To" i]', '#to']),
+    subject: pick([
+      '[name="subjectbox"]', '[name="subject"]', '[aria-label*="Subject" i]', '#subject',
+    ]),
+    body: pick([
+      '[g_editable="true"]', '[role="textbox"][aria-label*="Body" i]', 'textarea#body', '#body',
+    ]),
+  };
+}
+"""
+
 
 class PlaywrightEmailSurface:
     """`EmailSurface` over a Playwright page."""
@@ -151,6 +176,30 @@ class PlaywrightEmailSurface:
             bound_verbs=self._bound_verbs,
             approved=self._approved,
         )
+
+    async def preview(self, call: ActionCall) -> str:
+        """What this action will actually do, with tokens resolved.
+
+        Read from the LIVE compose fields rather than reconstructed from what the agent
+        thinks it typed. Those are two different things whenever a field rejected input,
+        autocompleted, or was edited by a take-over — and the whole value of the card is
+        that the human sees what is really there.
+        """
+        if call.name not in ("Send", "SendInvite"):
+            return f"{call.name}({', '.join(f'{k}={v!r}' for k, v in call.args.items())})"
+
+        try:
+            fields = await self._page.evaluate(_COMPOSE_FIELDS_JS)
+        except Exception:  # page closed or navigating
+            return "(could not read the draft — check the browser view before approving)"
+
+        lines = [
+            f"To:      {fields.get('to') or '(empty)'}",
+            f"Subject: {fields.get('subject') or '(empty)'}",
+            "",
+            (fields.get("body") or "(empty body)").strip(),
+        ]
+        return "\n".join(lines)
 
     # ── verbs ───────────────────────────────────────────────────────────────
 

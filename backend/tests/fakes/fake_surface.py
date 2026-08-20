@@ -50,13 +50,21 @@ class FakeEmailSurface:
         results: Sequence[ActionResult] | None = None,
         *,
         unavailable: bool = False,
+        preview: str = "",
     ) -> None:
         self._observations = list(observations or [])
         self._results = list(results or [])
         self._unavailable = unavailable
+        self._preview = preview
 
         #: Every action attempted, in order. The assertion surface for guardrail tests.
         self.calls: list[ActionCall] = []
+        #: Calls a preview was requested for — proves the human was shown it FIRST.
+        self.previewed: list[ActionCall] = []
+        #: Fingerprints a human authorized. The fake refuses gated verbs without one,
+        #: exactly like the real surface — a rubber-stamping double would make every
+        #: approval test pass while proving nothing.
+        self.approved: set[str] = set()
         self.observe_count = 0
 
     # ── the port ────────────────────────────────────────────────────────────
@@ -76,10 +84,36 @@ class FakeEmailSurface:
     async def act(self, call: ActionCall) -> ActionResult:
         if self._unavailable:
             raise SurfaceUnavailable("fake surface is configured as unreachable")
+        from app.surface.dispatch import GATED_VERBS, approval_fingerprint
+
+        if call.name in GATED_VERBS and approval_fingerprint(call) not in self.approved:
+            return ActionResult(
+                success=False,
+                reason=f"{call.name} has no matching approval",
+                error_code="APPROVAL_REQUIRED",
+            )
+
         self.calls.append(call)
         if self._results:
             return self._results.pop(0)
         return ActionResult(success=True, reason=f"{call.name} ok")
+
+    def approve(self, fingerprint: str) -> None:
+        """Record an authorization, and remember it was granted.
+
+        The fake ENFORCES this like the real surface does — a double that rubber-stamps
+        every send would make the approval tests pass while proving nothing.
+        """
+        self.approved.add(fingerprint)
+
+    async def preview(self, call: ActionCall) -> str:
+        """A scripted resolved draft. Records that a preview was asked for.
+
+        Tests assert on `previewed` to prove the human was shown something *before* the
+        action ran — "it asked first" is the claim, and the order is the whole of it.
+        """
+        self.previewed.append(call)
+        return self._preview or f"{call.name} with {call.args}"
 
     # ── assertions ──────────────────────────────────────────────────────────
 

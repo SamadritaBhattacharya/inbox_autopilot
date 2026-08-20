@@ -22,31 +22,45 @@ from __future__ import annotations
 import logging
 
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from app.agent.recovery_nodes import (
+    build_diagnose_node,
+    build_options_node,
+    build_verify_node,
+)
 from app.agent.routing import (
     ACT,
+    APPROVAL,
     ASK,
+    DIAGNOSE,
     DISPATCH,
     FINALIZE,
     LINEAR,
     OBSERVE,
+    OPTIONS,
     PLANNER,
     REASON,
     ROUTER,
+    VERIFY,
     route_after_act,
+    route_after_approval,
+    route_after_diagnose,
     route_after_dispatch,
     route_after_gate,
     route_after_observe,
+    route_after_options,
     route_after_reason,
     route_after_router,
+    route_after_verify,
 )
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
 from app.events.sink import NullSink
 from app.feedback.store import FeedbackStore
-from app.llm.base import LLMClient
+from app.llm.base import LLMClient, Message
 from app.manager.intent import Action
 from app.manager.nodes import (
     build_context_gate_node,
@@ -54,13 +68,56 @@ from app.manager.nodes import (
     build_planner_node,
     build_router_node,
 )
+from app.recovery.registry import CuratedSkillRegistry
 from app.rules.store import InMemoryRulesStore, RulesStore
 from app.surface.base import EmailSurface
+from app.surface.dispatch import approval_fingerprint
 from app.telemetry.records import ErrorCode, StepRecord
+from app.workers.approval import (
+    Verdict,
+    build_request,
+    decision_from,
+    is_gated,
+)
 from app.workers.loop import build_act_node, build_observe_node, build_reason_node
 from app.workers.registry import worker_for
+from app.workers.rules_worker import build_linear_node
 
 logger = logging.getLogger(__name__)
+
+#: Custom types the checkpointer is allowed to round-trip.
+#:
+#: LangGraph refuses unregistered types on deserialization (a warning today, an error
+#: tomorrow), and the failure mode is quiet and nasty: state silently loses a field, and the
+#: field it loses most often is `error_code` — because a FAILED run is exactly the one being
+#: resumed. An untyped failure is the one thing this system is not allowed to produce, so
+#: the allowlist is explicit rather than left to a default.
+ALLOWED_CHECKPOINT_MODULES = (
+    ("app.manager.intent", "Action"),
+    ("app.manager.intent", "TaskIntent"),
+    ("app.manager.intent", "Route"),
+    ("app.manager.intent", "Plan"),
+    ("app.telemetry.records", "StepRecord"),
+    ("app.telemetry.records", "ErrorCode"),
+    ("app.telemetry.records", "Usage"),
+    ("app.llm.base", "Message"),
+    ("app.llm.base", "ToolCall"),
+    ("app.recovery.causes", "Cause"),
+    ("app.recovery.causes", "Diagnosis"),
+    ("inbox_contracts.models", "Observation"),
+    ("inbox_contracts.models", "Element"),
+    ("inbox_contracts.models", "Viewport"),
+    ("inbox_contracts.models", "MailContext"),
+    ("inbox_contracts.models", "ActionCall"),
+    ("inbox_contracts.models", "ActionResult"),
+)
+
+
+def default_checkpointer() -> InMemorySaver:
+    """A saver that can actually round-trip this graph's state."""
+    return InMemorySaver(
+        serde=JsonPlusSerializer(allowed_msgpack_modules=ALLOWED_CHECKPOINT_MODULES)
+    )
 
 
 def build_ask_node():
@@ -127,6 +184,109 @@ def build_finalize_node():
     return finalize
 
 
+def build_approval_gate_node(
+    surface: EmailSurface,
+    emitter: EventEmitter,
+    *,
+    timeout_seconds: int = 600,
+):
+    """Pause for a human before anything irreversible.
+
+    The interrupt is what makes this durable: the run is checkpointed and stopped, not a
+    coroutine parked in memory. A user can close the tab, come back in five minutes, and
+    the draft is still sitting there waiting — which is the difference between a gate and
+    a race against an HTTP timeout.
+
+    Three outcomes, and only one of them sends:
+      approve → the exact payload is authorized, then dispatched
+      edit    → the human's text replaces the field; the loop resumes. NOT an approval:
+                an edited draft is a different draft and has to be looked at again.
+      reject  → nothing is dispatched; the agent offers an alternative or completes false.
+    """
+
+    async def approval_gate(state: AgentState) -> dict:
+        call = state.last_action
+        if not is_gated(call):
+            return {}
+
+        # Derived from the payload, not random: this node re-executes when the run is
+        # resumed, and a fresh id each time would present one pending decision as several.
+        request_id = f"ap-{approval_fingerprint(call)[:16]}"
+        # RESOLVED, from the executor: a human cannot verify "send to P17".
+        preview = await surface.preview(call)
+        request = build_request(
+            call, request_id=request_id, preview=preview, timeout_seconds=timeout_seconds
+        )
+
+        await emitter.approval_request(
+            request_id=request.request_id,
+            kind=request.kind,
+            summary=request.summary,
+            preview=request.preview,
+            expires_at=request.expires_at.isoformat(),
+        )
+
+        raw = interrupt(
+            {
+                "approval": True,
+                "requestId": request.request_id,
+                "kind": request.kind,
+                "summary": request.summary,
+                "preview": request.preview,
+                "expiresAt": request.expires_at.isoformat(),
+            }
+        )
+        decision = decision_from(raw)
+        await emitter.approval_result(request.request_id, decision.verdict.value)
+
+        # The deadline is enforced by the transport, which is where the waiting actually
+        # happens. It cannot be enforced here: this node re-executes on resume, so
+        # `expires_at` is recomputed to a fresh future time and would never have elapsed.
+        if decision.verdict is Verdict.EXPIRED or request.expired:
+            # A pending approval never becomes an implicit yes.
+            return {
+                "status": "failed",
+                "error_code": ErrorCode.APPROVAL_TIMEOUT,
+                "finished": True,
+                "success": False,
+                "reason": "the approval expired before anyone answered",
+            }
+
+        if decision.verdict is Verdict.APPROVE:
+            # Authorize THIS payload only. The surface refuses anything else.
+            surface.approve(request.fingerprint)
+            return {"messages": [Message(role="user", content="Approved — go ahead.")]}
+
+        if decision.verdict is Verdict.EDIT:
+            return {
+                "last_action": None,  # nothing is dispatched; the loop re-decides
+                "messages": [
+                    Message(
+                        role="user",
+                        content=(
+                            f"Do not send yet. Change it: {decision.edit}\n"
+                            "Update the draft, then propose sending again."
+                        ),
+                    )
+                ],
+            }
+
+        return {
+            "last_action": None,
+            "messages": [
+                Message(
+                    role="user",
+                    content=(
+                        f"I declined that. {decision.reason or ''} "
+                        "Suggest an alternative, or call Complete(success=false)."
+                    ).strip(),
+                )
+            ],
+        }
+
+    return approval_gate
+
+
 def build_dispatch_node(emitter: EventEmitter):
     """Hand the run to a worker.
 
@@ -164,9 +324,11 @@ def build_manager_graph(
     surface: EmailSurface | None = None,
     emitter: EventEmitter | None = None,
     rules: RulesStore | None = None,
+    registry: CuratedSkillRegistry | None = None,
     feedback: FeedbackStore | None = None,
     threshold: float = 0.85,
     max_steps: int = 40,
+    approval_timeout_seconds: int = 600,
     checkpointer=None,
 ):
     """Compile the graph. Concretes come from the composition root.
@@ -176,6 +338,7 @@ def build_manager_graph(
     rather than a mock-shaped lie.
     """
     rules = rules or InMemoryRulesStore()
+    registry = registry or CuratedSkillRegistry()
     emitter = emitter or EventEmitter(NullSink())
 
     graph = StateGraph(AgentState)
@@ -200,6 +363,16 @@ def build_manager_graph(
             ),
         )
         graph.add_node(ACT, build_act_node(surface, emitter, tools=tools_for_state))
+        graph.add_node(LINEAR, build_linear_node(surface, emitter, rules))
+        graph.add_node(VERIFY, build_verify_node(emitter))
+        graph.add_node(DIAGNOSE, build_diagnose_node(emitter, registry))
+        graph.add_node(OPTIONS, build_options_node(emitter, registry))
+        graph.add_node(
+            APPROVAL,
+            build_approval_gate_node(
+                surface, emitter, timeout_seconds=approval_timeout_seconds
+            ),
+        )
 
     graph.add_edge(START, "intake")
     # No intake -> router edge exists. That absence IS the 100%-context rule.
@@ -227,21 +400,44 @@ def build_manager_graph(
         # observe -> reason -> act -> observe. `act` NEVER returns to `reason`: acting on a
         # stale observation is the most reliable way to click the wrong thing.
         graph.add_conditional_edges(
-            DISPATCH, route_after_dispatch, {OBSERVE: OBSERVE, FINALIZE: FINALIZE}
+            DISPATCH,
+            route_after_dispatch,
+            {OBSERVE: OBSERVE, LINEAR: LINEAR, FINALIZE: FINALIZE},
+        )
+        # Deterministic work verifies too: 'the rule ran' and 'the rule worked' are
+        # different claims, and only one of them is worth reporting.
+        graph.add_edge(LINEAR, VERIFY)
+        graph.add_conditional_edges(
+            OBSERVE, route_after_observe, {REASON: REASON, VERIFY: VERIFY}
         )
         graph.add_conditional_edges(
-            OBSERVE, route_after_observe, {REASON: REASON, FINALIZE: FINALIZE}
+            REASON,
+            route_after_reason,
+            {ACT: ACT, APPROVAL: APPROVAL, REASON: REASON, VERIFY: VERIFY},
         )
         graph.add_conditional_edges(
-            REASON, route_after_reason, {ACT: ACT, REASON: REASON, FINALIZE: FINALIZE}
+            APPROVAL,
+            route_after_approval,
+            {ACT: ACT, REASON: REASON, FINALIZE: FINALIZE},
         )
         graph.add_conditional_edges(
-            ACT, route_after_act, {OBSERVE: OBSERVE, FINALIZE: FINALIZE}
+            ACT, route_after_act, {OBSERVE: OBSERVE, VERIFY: VERIFY}
+        )
+        # A run that thinks it is done is verified before it is believed; a verified
+        # failure earns a diagnosis, and a diagnosis earns ranked options.
+        graph.add_conditional_edges(
+            VERIFY, route_after_verify, {FINALIZE: FINALIZE, DIAGNOSE: DIAGNOSE}
+        )
+        graph.add_conditional_edges(
+            DIAGNOSE, route_after_diagnose, {OPTIONS: OPTIONS, FINALIZE: FINALIZE}
+        )
+        graph.add_conditional_edges(
+            OPTIONS, route_after_options, {OBSERVE: OBSERVE, FINALIZE: FINALIZE}
         )
 
     graph.add_edge(FINALIZE, END)
 
-    return graph.compile(checkpointer=checkpointer or InMemorySaver())
+    return graph.compile(checkpointer=checkpointer or default_checkpointer())
 
 
 __all__ = ["build_manager_graph", "LINEAR"]

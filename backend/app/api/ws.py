@@ -75,15 +75,34 @@ async def drive(run: Run, container: AppContainer, task: str) -> None:
                 return
 
             request = interrupts[0].value
-            request_id = f"q-{uuid.uuid4().hex[:8]}"
-            await emitter.question(
-                str(request.get("question", "")),
-                list(request.get("missing", [])),
-                request_id,
-            )
+
+            # Three kinds of pause reach here. Approval and options were already
+            # emitted by the nodes that raised them — those need the executor to resolve a
+            # draft, or the registry to rank remedies, so neither could be built here. A
+            # question has no such owner, so it is emitted here.
+            if not (request.get("approval") or request.get("options")):
+                await emitter.question(
+                    str(request.get("question", "")),
+                    list(request.get("missing", [])),
+                    f"q-{uuid.uuid4().hex[:8]}",
+                )
 
             # The run is checkpointed here, not parked. This await is just this coroutine.
-            answer = await run.expect_answer()
+            #
+            # An approval carries a deadline, and it is enforced HERE because this is where
+            # the waiting is. The gate node cannot do it: LangGraph re-executes a node from
+            # the top on resume, so any deadline it computes is recomputed into the future
+            # and has never elapsed by the time it is checked.
+            waiting = run.expect_answer()
+            if request.get("approval"):
+                try:
+                    answer = await asyncio.wait_for(
+                        waiting, timeout=container.settings.approval_timeout_seconds
+                    )
+                except TimeoutError:
+                    answer = {"verdict": "expired", "reason": "no answer before the deadline"}
+            else:
+                answer = await waiting
             payload = Command(resume=answer)
 
     except asyncio.CancelledError:
@@ -158,6 +177,31 @@ async def ws_run(websocket: WebSocket, container: AppContainer | None = None) ->
                 run = RUNS.get(viewing) if viewing else None
                 if run is not None and not run.answer(message.get("answer", "")):
                     logger.debug("answer arrived with nothing waiting for it")
+
+            elif kind == "decision":
+                # An approval verdict. Passed through verbatim so the gate — not this
+                # transport layer — decides what counts as consent; `decision_from` fails
+                # closed on anything it does not recognise.
+                run = RUNS.get(viewing) if viewing else None
+                if run is not None:
+                    run.answer(
+                        {
+                            "verdict": message.get("verdict"),
+                            "edit": message.get("edit", ""),
+                            "reason": message.get("reason", ""),
+                        }
+                    )
+
+            elif kind == "choice":
+                # A recovery option. Passed through verbatim so the options node — not this
+                # transport layer — interprets it; unlike an approval, an unparseable choice
+                # falls back to the RECOMMENDED remedy rather than failing, because every
+                # option here is a safe read-only move.
+                run = RUNS.get(viewing) if viewing else None
+                if run is not None:
+                    run.answer(
+                        {"option": message.get("option", 1), "text": message.get("text", "")}
+                    )
 
             elif kind == "feedback":
                 # Mid-run steering. Recorded and injected on the next turn; acknowledged

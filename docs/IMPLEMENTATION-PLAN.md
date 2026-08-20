@@ -311,22 +311,22 @@ from the LLM.
 
 ### Tasks
 
-- [ ] **M4.1 — `Approver` port + `ApprovalRequest` / `Decision`.**
-- [ ] **M4.2 — `approval_gate` node.** Interrupt-based; payload-matched; expiry →
+- [x] **M4.1 — `Approver` port + `ApprovalRequest` / `Decision`.**
+- [x] **M4.2 — `approval_gate` node.** Interrupt-based; payload-matched; expiry →
       `APPROVAL_TIMEOUT`; reject with no alternative → `APPROVAL_REJECTED_NO_ALT`.
   - *Test:* `test_no_send_without_approval` — every send path fails closed with the approver absent.
   - *Test:* a decision approving payload A does **not** authorize a mutated payload B.
   - *Test:* no `RemediationStrategy` can produce an approval decision.
-- [ ] **M4.3 — `ComposeWorker`.** Compose → To → Subject → Body as **separate observable steps**;
+- [x] **M4.3 — `ComposeWorker`.** Compose → To → Subject → Body as **separate observable steps**;
       token→address resolution at dispatch only.
   - *Test:* the trajectory shows four distinct fill actions, not one atomic jump.
-- [ ] **M4.4 — Draft preview.** Resolved draft rendered for the human; asserted absent from
+- [x] **M4.4 — Draft preview.** Resolved draft rendered for the human; asserted absent from
       `messages`, the trajectory, and every LLM request body.
-- [ ] **M4.5 — Edit / take-over.** Edit replaces field content and returns to the fill step; it does
+- [x] **M4.5 — Edit / take-over.** Edit replaces field content and returns to the fill step; it does
       **not** approve.
-- [ ] **M4.6 — `verify` for send.** Contract check: is the message in Sent, and does it match the
+- [x] **M4.6 — `verify` for send.** Contract check: is the message in Sent, and does it match the
       intended recipient token?
-- [ ] **M4.7 — `ApprovalCard`** in the cockpit: Approve / Edit / Reject with the resolved preview.
+- [x] **M4.7 — `ApprovalCard`** in the cockpit: Approve / Edit / Reject with the resolved preview.
 
 **Acceptance**
 - J1 from [`PRD.md §7`](PRD.md) runs end to end.
@@ -341,21 +341,21 @@ from the LLM.
 
 ### Tasks
 
-- [ ] **M5.1 — Cause classifier.** Pure function per the table in
+- [x] **M5.1 — Cause classifier.** Pure function per the table in
       [`SYSTEM-DESIGN.md §9.2`](SYSTEM-DESIGN.md); a test per row.
-- [ ] **M5.2 — `RemediationStrategy` + `SkillRegistry`.** The eight v1 strategies; each unit-tested in
+- [x] **M5.2 — `RemediationStrategy` + `SkillRegistry`.** The eight v1 strategies; each unit-tested in
       isolation for `applies_to` scoring and `to_option` output.
-- [ ] **M5.3 — `diagnose` node.** Cause + plain-language explanation + evidence.
-- [ ] **M5.4 — `options` node.** Four ranked options, `[1]` marked Recommended, `[4]` always
+- [x] **M5.3 — `diagnose` node.** Cause + plain-language explanation + evidence.
+- [x] **M5.4 — `options` node.** Four ranked options, `[1]` marked Recommended, `[4]` always
       free-form; interrupt; resume with the chosen remedy.
   - *Test:* option 4 always present; free text becomes loop guidance.
   - *Test:* **anti-loop** — the same cause twice recomputes options excluding attempted strategies;
     a third occurrence finalizes instead of asking again.
-- [ ] **M5.5 — `RulesStore` + matcher + soft-guidance renderer.**
-- [ ] **M5.6 — `RulesWorker`.** Linear topology, batch execution.
+- [x] **M5.5 — `RulesStore` + matcher + soft-guidance renderer.**
+- [x] **M5.6 — `RulesWorker`.** Linear topology, batch execution.
   - *Test:* `test_linear_route_zero_llm_calls`.
   - *Test:* auto-send is off by default and cannot be enabled by config alone.
-- [ ] **M5.7 — `OptionsCard`** in the cockpit.
+- [x] **M5.7 — `OptionsCard`** in the cockpit.
 
 **Acceptance**
 - J3 from [`PRD.md §7`](PRD.md) runs: overlay fixture → diagnosis → four options → chosen remedy →
@@ -363,6 +363,33 @@ from the LLM.
 - A rules task records zero LLM calls in the trajectory.
 
 ---
+
+> **M4/M5 note — three bugs the graph found once the recovery layer existed.**
+>
+> 1. **Self-heal was unreachable from the common failures.** `reason` and `observe` routed
+>    terminal states straight to `finalize`, and *most* failures are detected in `reason` —
+>    STUCK, MAX_STEPS, REASONING_MISSING, NO_ACTION all end the run from there. The whole
+>    recovery layer was only reachable from the rarer path where an action had already been
+>    dispatched. Both now route through `verify`.
+>
+> 2. **`diagnose` produced a diagnosis and then finalized anyway.** The run arrives already
+>    marked `finished` — that is *how* it got diagnosed — so the next router short-circuited
+>    past the options it had just been diagnosed for. Diagnose now clears the flag while
+>    keeping the error code, since only a chosen remedy earns the right to clear that.
+>
+> 3. **The approval deadline could never fire.** LangGraph re-executes a node from the top
+>    on resume, so `expires_at` was recomputed into the future and had never elapsed by the
+>    time it was checked. The deadline moved to the transport, which is where the waiting
+>    actually happens, and `Verdict.EXPIRED` makes "nobody answered" distinct from "someone
+>    declined". The same replay behaviour was flashing duplicate approval and options cards;
+>    request ids are now derived from state rather than random, and the emitter drops a
+>    repeat of the same pending decision.
+>
+> Also registered the checkpointer's msgpack allowlist. LangGraph was warning that custom
+> types would be **blocked** in a future version, and the quiet failure mode is the nasty
+> one: state loses a field on resume, and the field most likely to go is `error_code` —
+> because a FAILED run is exactly the one being resumed. An untyped failure is the one thing
+> this system is not allowed to produce.
 
 ## M6 — Calendar, hardening, benchmark
 

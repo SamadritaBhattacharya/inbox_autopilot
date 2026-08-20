@@ -31,14 +31,31 @@ def _clean(value: Any) -> Any:
     return value
 
 
+#: Events whose node may re-execute on resume. LangGraph re-runs everything BEFORE an
+#: `interrupt()` when a run is resumed, so a card emitted there fires a second time — the
+#: cockpit would flash a duplicate approval or options card for a decision already made.
+_REPLAYABLE = frozenset({protocol.APPROVAL_REQUEST, protocol.OPTIONS, protocol.QUESTION})
+
+
 class EventEmitter:
     def __init__(self, sink: EventSink) -> None:
         self._sink = sink
+        self._last: tuple[str, str] | None = None
 
     async def _emit(self, event: str, data: dict[str, Any], *, redact: bool = True) -> None:
-        await self._sink.emit(
-            AgentEvent(event=event, data=_clean(data) if redact else data)
-        )
+        payload = _clean(data) if redact else data
+
+        # Drop a repeat of the same pending decision. Keyed on the REQUEST ID rather than
+        # the whole payload: a replay recomputes volatile fields like `expiresAt`, so a
+        # payload comparison would never match and every resume would flash a fresh card.
+        # This is why the nodes derive their request ids deterministically from state.
+        if event in _REPLAYABLE:
+            signature = (event, str(payload.get("requestId", "")))
+            if signature == self._last:
+                return
+            self._last = signature
+
+        await self._sink.emit(AgentEvent(event=event, data=payload))
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 

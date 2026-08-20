@@ -28,8 +28,36 @@ export type Entry =
   | { kind: "result"; success: boolean; reason: string; errorCode: string | null }
   | { kind: "observation"; elements: number; dropped: number; view: string }
   | { kind: "feedback"; text: string }
+  | { kind: "decision"; verdict: string }
+  | { kind: "diagnosis"; plain: string; evidence: string }
   | { kind: "error"; message: string; errorCode: string | null }
   | { kind: "finalize"; success: boolean; reason: string; errorCode: string | null };
+
+export type PendingApproval = {
+  requestId: string;
+  kind: string;
+  summary: string;
+  /** The RESOLVED draft. Cockpit-only — never re-enters the model's context. */
+  preview: string;
+  expiresAt: string;
+};
+
+export type Choice = {
+  n: number;
+  label: string;
+  detail: string;
+  recommended: boolean;
+  freeform: boolean;
+};
+
+export type PendingOptions = {
+  requestId: string;
+  cause: string;
+  /** Plain language, never an error code — it is all the user has to choose from. */
+  plain: string;
+  evidence: string;
+  choices: Choice[];
+};
 
 export type PendingQuestion = {
   requestId: string;
