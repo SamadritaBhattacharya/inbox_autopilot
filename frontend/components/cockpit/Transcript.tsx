@@ -205,6 +205,19 @@ function EntryRow({ entry }: { entry: Entry }) {
         </div>
       );
 
+    case "stopped":
+      return (
+        <div className="rise mt-4 rounded-[--radius-card] border border-line bg-raised/40 px-4 py-3">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted">
+            stopped
+          </span>
+          <p className="mt-1.5 text-[13.5px] leading-relaxed text-text">
+            You stopped this run. Nothing further was done to your mailbox — ask for
+            something else below.
+          </p>
+        </div>
+      );
+
     default:
       return null;
   }

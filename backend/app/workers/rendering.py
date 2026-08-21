@@ -10,6 +10,30 @@ from __future__ import annotations
 from app.agent.state import AgentState
 
 
+def task_block(state: AgentState) -> str:
+    """The task, plus the slots intake already resolved.
+
+    The slots are the point. Intake mints an addressable token for every address the
+    operator typed (`_trust_addresses`), and without passing them on, that work is invisible
+    to the worker: it reads "send email to <someone>", has no token in hand, and asks the
+    human for one that was minted three nodes earlier. Naming them here closes that loop —
+    "recipient_identity: P1" is the whole answer to "who am I sending this to".
+
+    Only slots with a value are listed. An empty slot is noise the context gate has already
+    dealt with, and printing `topic: ` invites the model to treat blank as an answer.
+    """
+    lines = [f"Task: {state.task}"]
+
+    intent = state.intent
+    if intent is not None:
+        filled = {name: value for name, value in intent.slots.items() if str(value).strip()}
+        if filled:
+            lines.append("")
+            lines.append("Already established (use these — they are resolved and valid):")
+            lines.extend(f"- {name}: {value}" for name, value in filled.items())
+    return "\n".join(lines)
+
+
 def observation_block(state: AgentState) -> str:
     """Render the observation as the model sees it."""
     observation = state.observation

@@ -31,7 +31,9 @@ export type Entry =
   | { kind: "decision"; verdict: string }
   | { kind: "diagnosis"; plain: string; evidence: string }
   | { kind: "error"; message: string; errorCode: string | null }
-  | { kind: "finalize"; success: boolean; reason: string; errorCode: string | null };
+  | { kind: "finalize"; success: boolean; reason: string; errorCode: string | null }
+  /** The human pressed Stop. Distinct from `finalize`, which is the agent concluding. */
+  | { kind: "stopped" };
 
 export type PendingApproval = {
   requestId: string;

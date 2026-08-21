@@ -1,25 +1,15 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useStartRun } from "@/lib/startRun";
 
 /**
- * Starts a run by navigating to its URL.
- *
- * The thread id is minted here rather than by the server, so the run has a shareable
- * address before it has produced a single event. The cockpit at that URL opens the socket
- * and starts the work — one connection, no hand-off race between two pages.
+ * The landing page's way in. The navigation itself lives in `useStartRun`, shared with the
+ * cockpit composer so both mint thread ids the same way.
  */
 export function StartForm({ examples }: { examples: string[] }) {
-  const router = useRouter();
+  const start = useStartRun();
   const [task, setTask] = useState("");
-
-  const start = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    const threadId = `run-${Math.random().toString(36).slice(2, 10)}`;
-    router.push(`/run/${threadId}?task=${encodeURIComponent(trimmed)}`);
-  };
 
   return (
     <div>

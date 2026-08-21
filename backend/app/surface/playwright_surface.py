@@ -452,6 +452,8 @@ async def connect_surface(
     *,
     endpoint: str,
     start_url: str | None = None,
+    auto_launch: bool = True,
+    profile_dir: str | None = None,
     **surface_kwargs: Any,
 ) -> tuple[PlaywrightEmailSurface, Any]:
     """Attach to a browser that is already running — and already signed in.
@@ -461,10 +463,16 @@ async def connect_surface(
     checking for: the human signs in normally, in their own browser, and the agent joins a
     session that is already authenticated.
 
+    When nothing is listening and `auto_launch` is set, we start that browser ourselves on
+    a profile that has already been signed into — see `_ensure_browser`. The human runs one
+    command, once, ever.
+
     We open our **own tab** in the existing profile rather than seizing one of theirs, and
     on shutdown we close only that tab and disconnect. Closing a user's browser out from
     under them because a run finished would be its own kind of bug.
     """
+
+    await _ensure_browser(endpoint, auto_launch=auto_launch, profile_dir=profile_dir)
 
     manager = await _start_playwright()
     try:
@@ -472,8 +480,9 @@ async def connect_surface(
     except Exception as exc:
         await manager.stop()
         raise SurfaceUnavailable(
-            f"could not attach to a browser at {endpoint} ({exc}). Start Chrome with "
-            "--remote-debugging-port and sign in there first; see docs/RUNNING.md."
+            f"could not attach to a browser at {endpoint} ({exc}). Something is listening "
+            "on that port but it is not a Chrome debugging endpoint; free the port or "
+            "point CDP_ENDPOINT elsewhere. See docs/RUNNING.md."
         ) from exc
 
     # Reuse the signed-in profile's context. A fresh context would have no cookies, which
@@ -499,6 +508,72 @@ async def connect_surface(
         await manager.stop()
 
     return surface, close
+
+
+async def _ensure_browser(
+    endpoint: str,
+    *,
+    auto_launch: bool,
+    profile_dir: str | None,
+) -> None:
+    """Make sure something is listening on the debugging port before Playwright dials it.
+
+    Every one of these paths otherwise arrives as the same `ECONNREFUSED`, and the right
+    action differs completely between them: start the browser, sign in, or close the copy
+    of Chrome that is squatting the profile. Telling them apart is the whole job here.
+    """
+    from app.surface import chrome_launcher as launcher
+
+    host, port = launcher.endpoint_host_port(endpoint)
+    if await launcher.port_is_open(host, port):
+        return
+
+    if not auto_launch:
+        raise SurfaceUnavailable(
+            f"nothing is listening at {endpoint}, and CDP_AUTO_LAUNCH is off. Run "
+            "`python scripts/chrome.py serve --isolated`, or set CDP_AUTO_LAUNCH=true."
+        )
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise SurfaceUnavailable(
+            f"nothing is listening at {endpoint}. It is not a local address, so this "
+            "process cannot start it — bring that browser up yourself."
+        )
+
+    data_dir = Path(profile_dir) if profile_dir else launcher.ISOLATED_PROFILE
+
+    # First run: nothing here has ever browsed, so there are no Gmail cookies to reuse and
+    # attaching would only land on the login wall. Open an ordinary window instead — no
+    # debugging port, which is the one configuration Google's sign-in accepts — and stop.
+    profile = launcher.signed_in_profile(data_dir)
+    if profile is None:
+        try:
+            launcher.spawn(port=None, data_dir=data_dir)
+        except launcher.ChromeNotFound as exc:
+            raise SurfaceUnavailable(str(exc)) from exc
+        raise SurfaceUnavailable(
+            "this is the first run, so I opened a normal Chrome window on the agent's own "
+            f"profile ({data_dir}). Sign into Gmail there, close that window, then send "
+            "your message again — after this the agent starts the browser itself. The "
+            "window has no debugging port on purpose: that is the only way Google accepts "
+            "a sign-in."
+        )
+
+    # `profile`, not `Default`. Signing in through the account picker can put the session in
+    # a numbered profile and leave `Default` pristine, and attaching to that empty default
+    # strands the agent on a login page inside a browser that is, in fact, signed in.
+    logger.info("nothing at %s; starting Chrome on %s / %s", endpoint, data_dir, profile)
+    try:
+        launcher.spawn(port=port, data_dir=data_dir, profile_directory=profile)
+    except launcher.ChromeNotFound as exc:
+        raise SurfaceUnavailable(str(exc)) from exc
+
+    if not await launcher.wait_for_port(host, port):
+        raise SurfaceUnavailable(
+            f"started Chrome but nothing ever listened on port {port}. Chrome silently "
+            "drops --remote-debugging-port when another instance already owns the profile "
+            f"at {data_dir}; close any window using it (check the system tray) and try "
+            "again."
+        )
 
 
 async def _warn_if_google_will_reject(page: Any) -> None:

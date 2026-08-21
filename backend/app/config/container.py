@@ -104,6 +104,8 @@ class AppContainer:
                 return await connect_surface(
                     endpoint=self.settings.cdp_endpoint,
                     start_url=self.settings.start_url,
+                    auto_launch=self.settings.cdp_auto_launch,
+                    profile_dir=self.settings.chrome_profile_dir or None,
                     **kwargs,
                 )
         else:

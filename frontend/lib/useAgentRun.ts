@@ -257,6 +257,11 @@ function toTimeline(events: AgentEvent[], task?: string): Entry[] {
           errorCode: (data.errorCode as string) ?? null,
         });
         break;
+      case "run_complete":
+        // Only when a human stopped it. Every other ending already rendered its own
+        // `finalize` card, and a second "it ended" row under it reads like a bug.
+        if (bool(data.stopped)) entries.push({ kind: "stopped" });
+        break;
       default:
         break; // unknown events are ignored, never fatal
     }

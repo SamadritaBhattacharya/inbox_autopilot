@@ -617,3 +617,32 @@ the live browser view off the top on each new message. Fixed twice over: the tra
 user has scrolled up to read, and the cockpit is `fixed inset-0` so the document has nothing
 to scroll regardless of the height chain above it. A height alone would only be as good as
 that chain — one `min-h-full` anywhere and the bug returns.
+
+
+### Two more faces of the sign-in problem
+
+Switching to real Chrome was not enough. Google rejects sign-in under **two** conditions, and
+only one had been addressed: a non-Google build (Chrome for Testing), *and* any Chrome
+started with remote debugging enabled. The two-phase "sign in without the port, then reopen
+with it" recipe worked in principle but asked the user to create and authenticate a fresh
+profile for no reason.
+
+The better answer was the one the user proposed: use the account they are already signed into
+on the machine. `scripts/chrome.py list` reads Chrome's own `Local State` to map profile
+directories to accounts, and `serve --profile-directory "Profile 5"` opens that profile with
+the port. Nothing signs in, so there is nothing for Google to reject. `--isolated` keeps the
+old behaviour for anyone who would rather not open a debugging port on their main profile —
+the caveat is stated in the script's docstring rather than buried.
+
+One failure mode was invisible and cost real time: Chrome **silently ignores**
+`--remote-debugging-port` when an instance already owns the profile. It opens a tab in the
+running browser, no port listens, and the symptom is indistinguishable from the flag not
+working. `serve` now checks and refuses.
+
+**And the sign-in wall was being read as an inbox.** `detect_view` fell through to `"inbox"`
+for any URL without a `#`, so `accounts.google.com/signin/rejected` was classified as a
+mailbox. The agent behaved impeccably given what it was told: it read the "inbox", scrolled,
+re-read, then summarized an inbox it had never seen — six steps and a confident, entirely
+fictional answer. A wrong answer delivered fluently is worse than a refusal. There is now a
+`signed_out` view and a `NOT_SIGNED_IN` code, and `observe` terminates on it immediately
+rather than handing the model a page it cannot act in.

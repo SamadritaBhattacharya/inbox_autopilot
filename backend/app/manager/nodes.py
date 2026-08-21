@@ -109,8 +109,16 @@ def build_intake_node(
         # This is the same distinction that refuses a recipient lifted out of a hostile email
         # body, seen from the other side: what matters is not the address, it is who put it
         # there.
+        task = state.task
         if vault is not None:
             intent = _trust_user_addresses(intent, vault)
+            # The TASK too, not just the slots. The worker is handed the task text verbatim,
+            # so leaving a raw address in it does two bad things at once: it puts real PII in
+            # front of the model — the one thing §13 exists to prevent — and it shows the
+            # model an address it is then told is impossible and forbidden, which is a
+            # deadlock it cannot reason its way out of. Both disappear if only the token is
+            # ever visible.
+            task = _trust_addresses(task, vault)
 
         logger.info("intake: %s (confidence %.2f)", intent.action, intent.action_confidence)
         if emitter is not None:
@@ -120,6 +128,7 @@ def build_intake_node(
                 intent.action.value, intent.slots, intent.action_confidence
             )
         return {
+            "task": task,
             "intent": intent,
             "missing_slots": missing_slots(intent),
             "history": [
@@ -137,17 +146,20 @@ def build_intake_node(
     return intake
 
 
+def _trust_addresses(text: str, vault: SessionPiiVault) -> str:
+    """Swap every operator-supplied address in `text` for an addressable token."""
+    for address in find_emails(text):
+        text = text.replace(address, vault.trust(address))
+    return text
+
+
 def _trust_user_addresses(intent: TaskIntent, vault: SessionPiiVault) -> TaskIntent:
     """Replace operator-supplied addresses in the intent with addressable tokens."""
     updated: dict[str, str] = {}
     for slot, value in intent.slots.items():
-        addresses = find_emails(value)
-        if not addresses:
+        if not find_emails(value):
             continue
-        rewritten = value
-        for address in addresses:
-            rewritten = rewritten.replace(address, vault.trust(address))
-        updated[slot] = rewritten
+        updated[slot] = _trust_addresses(value, vault)
     return intent.with_slots(**updated) if updated else intent
 
 

@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     # authenticated. It is also the honest shape of the product — the agent operates the
     # user's mailbox in the user's browser.
     cdp_endpoint: str = ""
+    # When the endpoint refuses a connection, start Chrome ourselves rather than making the
+    # human remember a second terminal. Off is for CI and for anyone who wants the browser
+    # under their own control.
+    cdp_auto_launch: bool = True
+    # The profile the auto-launcher signs into and reuses. Empty means `~/.inbox-agent-
+    # profile`. Deliberately NOT the everyday profile: Chrome ignores the debugging port
+    # while another instance owns the user-data-dir, which is the entire "close every Chrome
+    # window" problem.
+    chrome_profile_dir: str = ""
     start_url: str = "https://mail.google.com"
     browser_locale: str = "en-IN"
     browser_timezone: str = "Asia/Kolkata"

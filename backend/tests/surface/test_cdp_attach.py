@@ -91,10 +91,16 @@ async def test_closing_the_run_does_not_close_the_users_browser(debuggable_brows
 
 
 async def test_a_missing_browser_is_explained_not_dumped():
-    """Nothing is listening: say what to start, not just that a connection failed."""
+    """Nothing is listening and we were told not to start it: say what to run.
+
+    `auto_launch=False` is the point of the test — with it on, the honest behaviour is to
+    start the browser rather than report a problem, which is covered in `test_auto_launch`.
+    """
     with pytest.raises(SurfaceUnavailable) as exc:
-        await connect_surface(endpoint=f"http://127.0.0.1:{_free_port()}")
+        await connect_surface(
+            endpoint=f"http://127.0.0.1:{_free_port()}", auto_launch=False
+        )
 
     message = str(exc.value)
-    assert "--remote-debugging-port" in message
-    assert "RUNNING.md" in message
+    assert "scripts/chrome.py serve" in message
+    assert "CDP_AUTO_LAUNCH" in message

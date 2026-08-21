@@ -49,7 +49,7 @@ from app.prompts import load_prompt
 from app.surface.base import EmailSurface, SurfaceUnavailable
 from app.telemetry.records import ErrorCode, StepRecord
 from app.workers.internal_verbs import handle_internal
-from app.workers.rendering import observation_block
+from app.workers.rendering import observation_block, task_block
 from app.workers.tools import INTERNAL_VERBS
 
 logger = logging.getLogger(__name__)
@@ -238,7 +238,7 @@ def build_reason_node(
 
         messages = [
             Message(role="system", content=WORKER_SYSTEM, cacheable=True),
-            Message(role="user", content=f"Task: {state.task}"),
+            Message(role="user", content=task_block(state)),
             *history,
             Message(role="user", content=observation_block(state)),
             *nudges,
