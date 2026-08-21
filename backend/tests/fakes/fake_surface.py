@@ -86,7 +86,11 @@ class FakeEmailSurface:
             raise SurfaceUnavailable("fake surface is configured as unreachable")
         from app.surface.dispatch import GATED_VERBS, approval_fingerprint
 
-        if call.name in GATED_VERBS and approval_fingerprint(call) not in self.approved:
+        # Mirrors the real surface: consent covers the CONTENT the human was shown, so the
+        # fingerprint is recomputed from the live preview at dispatch. A double that checked
+        # something weaker would let the approval tests pass while proving less.
+        preview = await self.preview(call) if call.name in GATED_VERBS else ""
+        if call.name in GATED_VERBS and approval_fingerprint(call, preview) not in self.approved:
             return ActionResult(
                 success=False,
                 reason=f"{call.name} has no matching approval",

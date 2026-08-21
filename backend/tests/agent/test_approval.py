@@ -132,7 +132,36 @@ def test_an_edit_carries_the_humans_text():
 def test_the_request_binds_to_the_exact_payload():
     call = send_call(index=9, recipient="P1")
     request = build_request(call, request_id="ap-1", preview=DRAFT, timeout_seconds=600)
-    assert request.fingerprint == approval_fingerprint(call)
+    assert request.fingerprint == approval_fingerprint(call, DRAFT)
+
+
+def test_approval_binds_to_the_words_not_the_button():
+    """`Send(index=9)` says where the button is, not what the email says.
+
+    Fingerprinting the args alone meant one "yes" authorised that button for the rest of the
+    run: edit the body, retype it, call `Send(index=9)` again, and it matched an approval the
+    human gave for different words. The human approves an EMAIL.
+    """
+    call = send_call(index=9)
+    edited = DRAFT.replace("4pm", "9am")
+
+    assert approval_fingerprint(call, DRAFT) != approval_fingerprint(call, edited)
+
+
+def test_the_fingerprint_never_leaks_the_draft():
+    """It travels into request ids and logs; a resolved preview holds real addresses."""
+    fingerprint = approval_fingerprint(send_call(), DRAFT)
+
+    assert "priya.nair@corp.com" not in fingerprint
+    assert "It moved to 4pm." not in fingerprint
+
+
+def test_identical_content_is_stable_across_turns():
+    """The gate re-executes on resume, so an unchanged draft must fingerprint the same or
+    the human would be asked twice for one decision."""
+    call = send_call(index=9)
+
+    assert approval_fingerprint(call, DRAFT) == approval_fingerprint(call, DRAFT)
 
 
 def test_the_preview_shows_a_resolved_recipient():
@@ -236,7 +265,12 @@ async def test_an_edit_returns_to_the_loop_without_sending():
     """An edited draft is a different draft; it has to be approved again."""
     surface = compose_surface()
     llm = compose_llm(
-        extra=[acts("Complete", "Revised and stopping.", success=False, reason="revised")]
+        extra=[
+            # The reviser runs on the edit path, applying the correction to the existing
+            # draft instead of letting the loop regenerate the whole email.
+            drafted(subject="Friday demo", body="It moved to 4pm IST."),
+            acts("Complete", "Revised and stopping.", success=False, reason="revised"),
+        ]
     )
     graph, config = compose_run(surface, llm, "ap-run-4")
 

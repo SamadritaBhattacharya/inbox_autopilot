@@ -8,12 +8,14 @@ that only works if the edges are not buried under node bodies.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from langgraph.types import interrupt
 
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
 from app.llm.base import Message
+from app.manager.draft import Draft
 from app.surface.base import EmailSurface
 from app.surface.dispatch import approval_fingerprint
 from app.telemetry.records import ErrorCode
@@ -21,12 +23,18 @@ from app.workers.approval import Verdict, build_request, decision_from, is_gated
 
 logger = logging.getLogger(__name__)
 
+#: Applies ONE human correction to an existing draft, changing only what was asked.
+#: Built by `build_reviser` in `manager.writer`; a plain callable here so the gate depends on
+#: the capability rather than on the writer module.
+Reviser = Callable[[Draft, str], Awaitable[Draft]]
+
 
 def build_approval_gate_node(
     surface: EmailSurface,
     emitter: EventEmitter,
     *,
     timeout_seconds: int = 600,
+    revise: Reviser | None = None,
 ):
     """Pause for a human before anything irreversible.
 
@@ -96,18 +104,43 @@ def build_approval_gate_node(
             return {"messages": [Message(role="user", content="Approved — go ahead.")]}
 
         if decision.verdict is Verdict.EDIT:
-            return {
-                "last_action": None,  # nothing is dispatched; the loop re-decides
-                "messages": [
+            delta: dict = {"last_action": None}  # nothing is dispatched; the loop re-decides
+            instruction = decision.edit
+
+            # Revise the DRAFT rather than hand the instruction to the loop.
+            #
+            # Told "change the last sentence", the worker retyped the whole body from
+            # scratch, and it never came back the same: a greeting the human had already
+            # approved would quietly acquire new punctuation, a sentence they liked would be
+            # "improved". They then had to re-read the entire email to find an edit they
+            # never asked for. Revising against the existing text changes what was asked and
+            # returns everything else byte for byte.
+            if revise is not None and isinstance(state.draft, Draft) and instruction:
+                delta["draft"] = await revise(state.draft, instruction)
+                delta["messages"] = [
                     Message(
                         role="user",
                         content=(
-                            f"Do not send yet. Change it: {decision.edit}\n"
-                            "Update the draft, then propose sending again."
+                            f"Do not send yet. The human asked: {instruction}\n"
+                            "The draft above has been updated for you. Retype only the "
+                            "field that changed, leave the others alone, then propose "
+                            "sending again."
                         ),
                     )
-                ],
-            }
+                ]
+                return delta
+
+            delta["messages"] = [
+                Message(
+                    role="user",
+                    content=(
+                        f"Do not send yet. Change it: {instruction}\n"
+                        "Change ONLY what was asked; leave every other word exactly as it "
+                        "is. Then propose sending again."
+                    ),
+                )
+            ]
+            return delta
 
         return {
             "last_action": None,

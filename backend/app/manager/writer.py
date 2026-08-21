@@ -32,6 +32,7 @@ from app.telemetry.records import StepRecord
 logger = logging.getLogger(__name__)
 
 _WRITER_SYSTEM = load_prompt("writer")
+_REVISER_SYSTEM = load_prompt("reviser")
 
 #: Actions whose output is prose. `FORWARD` is included: a forward with a covering note is
 #: the normal case, and an empty one is a worse default than a short one.
@@ -124,3 +125,48 @@ def build_writer_node(llm: LLMClient, emitter: EventEmitter | None = None):
         }
 
     return writer
+
+
+def build_reviser(llm: LLMClient, emitter: EventEmitter | None = None):
+    """Apply one human correction to an existing draft, changing only what was asked.
+
+    **Why not just tell the worker.** Feeding "change the last sentence" back into the loop
+    made the model retype the whole body from scratch, and it never came back the same: a
+    greeting the human had already approved would quietly acquire new punctuation, a
+    sentence they liked would be "improved". They then had to re-read the entire email to
+    find the edit they did not ask for — which is worse than not helping.
+
+    Revising against the current draft, with the old text in front of it and an instruction
+    to leave the rest alone, is the difference between an edit and a rewrite.
+    """
+
+    async def revise(draft: Draft, instruction: str) -> Draft:
+        brief = "\n".join(
+            [
+                f"Current subject: {draft.subject}",
+                "Current body:",
+                draft.body,
+                "",
+                f"Instruction: {instruction}",
+            ]
+        )
+        result = await llm.complete(
+            role="executor",
+            messages=[
+                Message(role="system", content=_REVISER_SYSTEM, cacheable=True),
+                Message(role="user", content=brief),
+            ],
+        )
+        revised = _parse_draft(result.text or result.reasoning)
+        if revised is None:
+            # Keep what we had. A failed revision must not blank the email the human is
+            # partway through approving.
+            logger.warning("reviser produced no usable draft; keeping the current one")
+            return draft
+
+        logger.info("revised %r (was %r)", revised.subject, draft.subject)
+        if emitter is not None:
+            await emitter.draft(revised.subject, revised.body, revised.tone)
+        return revised
+
+    return revise

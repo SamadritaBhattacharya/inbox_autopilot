@@ -36,6 +36,7 @@ from app.security.tokenizer import PiiTokenizer
 from app.security.vault import SessionPiiVault
 from app.surface.base import SurfaceUnavailable
 from app.surface.dispatch import ActionValidator, DispatchRejected, ResolvedAction
+from app.workers.irreversible import is_irreversible
 from app.surface.extract import EXTRACT_JS, MAX_NODES, parse_elements, parse_meta
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -283,8 +284,16 @@ class PlaywrightEmailSurface:
         return observation
 
     async def act(self, call: ActionCall) -> ActionResult:
+        # Re-read the live draft before validating anything irreversible. The human approved
+        # WORDS, not a button, so consent has to be checked against what the fields say at
+        # the moment of dispatch — not against what they said when the card was rendered.
+        # Any edit in between invalidates the approval, and the gate asks again.
+        preview = ""
+        if is_irreversible(call, self._last_observation):
+            with contextlib.suppress(Exception):
+                preview = await self.preview(call)
         try:
-            resolved = self._validator().validate(call)
+            resolved = self._validator(preview).validate(call)
         except DispatchRejected as rejection:
             # A refusal is information, not a crash: the agent sees a typed failure and can
             # re-observe or choose differently.
@@ -308,7 +317,7 @@ class PlaywrightEmailSurface:
         await self._settle()
         return result
 
-    def _validator(self) -> ActionValidator:
+    def _validator(self, preview: str = "") -> ActionValidator:
         return ActionValidator(
             vault=self._vault,
             geometry=self._geometry,
@@ -317,6 +326,7 @@ class PlaywrightEmailSurface:
             # So the approval check can ask what an index points at. Same turn as the
             # geometry it is validated against — a stale one would gate the wrong element.
             observation=self._last_observation,
+            preview=preview,
         )
 
     async def preview(self, call: ActionCall) -> str:

@@ -63,7 +63,7 @@ from app.events.sink import NullSink
 from app.feedback.store import FeedbackStore
 from app.llm.base import LLMClient
 from app.manager.intent import Action
-from app.manager.writer import build_writer_node
+from app.manager.writer import build_reviser, build_writer_node
 from app.manager.nodes import (
     build_context_gate_node,
     build_intake_node,
@@ -271,7 +271,12 @@ def build_manager_graph(
         graph.add_node(
             APPROVAL,
             build_approval_gate_node(
-                surface, emitter, timeout_seconds=approval_timeout_seconds
+                surface,
+                emitter,
+                timeout_seconds=approval_timeout_seconds,
+                # So "change the last sentence" edits that sentence instead of
+                # regenerating the whole email.
+                revise=build_reviser(llm, emitter),
             ),
         )
 

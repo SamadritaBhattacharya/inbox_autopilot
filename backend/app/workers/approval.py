@@ -114,7 +114,8 @@ def build_request(
         kind=kind,
         summary=summaries[kind],
         preview=preview,
-        fingerprint=approval_fingerprint(call),
+        # Includes the preview: consent covers these exact words, not this button.
+        fingerprint=approval_fingerprint(call, preview),
         expires_at=datetime.now(UTC) + timedelta(seconds=timeout_seconds),
     )
 

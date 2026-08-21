@@ -23,6 +23,7 @@ a real bug rather than a hypothetical one:
 from __future__ import annotations
 
 import re
+from hashlib import sha256
 
 from dataclasses import dataclass
 from typing import Literal
@@ -83,6 +84,7 @@ class ActionValidator:
         bound_verbs: frozenset[str] | set[str],
         approved: frozenset[str] | set[str] = frozenset(),
         observation: Observation | None = None,
+        preview: str = "",
     ) -> None:
         self._vault = vault
         self._geometry = geometry
@@ -95,6 +97,10 @@ class ActionValidator:
         # Approval fingerprints, not verb names: approving one draft must not authorize a
         # different one. See `approval_fingerprint`.
         self._approved = frozenset(approved)
+        # The email as it stands RIGHT NOW, re-read from the live fields. Compared against
+        # what the human approved: if the body changed since they looked, the fingerprints
+        # differ and consent no longer covers it.
+        self._preview = preview
 
     def validate(self, call: ActionCall) -> ResolvedAction:
         self._check_verb(call)
@@ -119,12 +125,14 @@ class ActionValidator:
         # the `Send` verb, and the model reaches for it naturally.
         if not is_irreversible(call, self._observation):
             return
-        if approval_fingerprint(call) not in self._approved:
+        if approval_fingerprint(call, self._preview) not in self._approved:
             target = target_name(self._observation, call.args.get("index"))
             what = f"{call.name} on {target!r}" if target else call.name
             raise DispatchRejected(
                 "APPROVAL_REQUIRED",
-                f"{what} is irreversible and has no matching approval for this payload",
+                f"{what} is irreversible and has no approval matching its CURRENT content. "
+                "If the draft changed after it was approved, propose sending again so the "
+                "human can look at what it says now.",
             )
 
     #: Gmail's Compose control. Anchored so "Compose" matches and "Recompose", "Compose
@@ -217,16 +225,29 @@ def _split_tokens(value: str) -> list[str]:
     return [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
 
 
-def approval_fingerprint(call: ActionCall) -> str:
-    """A stable identity for one exact payload.
+def approval_fingerprint(call: ActionCall, preview: str = "") -> str:
+    """A stable identity for one exact payload — INCLUDING what the human read.
 
     Approval binds to THIS, not to the verb. Approving a draft to P3 must not authorize the
     same verb aimed at P9 a turn later — otherwise a single "yes" becomes a standing
     permission, which is exactly what an injected instruction would exploit.
+
+    **Why the preview is part of the identity.** `Send` carries an element index and nothing
+    else: `Send(index=108)` says where the button is, not what the email says. Fingerprinting
+    the args alone meant one approval authorised that button for the rest of the run — edit
+    the body, retype it, call `Send(index=108)` again, and it matched an approval the human
+    gave for different words. The human approves an EMAIL, so the email has to be in the
+    identity. The preview is the exact resolved text they were shown, recomputed from the
+    live fields at dispatch: change so much as a full stop and the approval no longer
+    matches, and the gate asks again.
     """
     parts = [call.name]
     for key in sorted(call.args):
         parts.append(f"{key}={call.args[key]!r}")
+    if preview:
+        # Hashed, not inlined: a resolved preview holds real addresses and body text, and a
+        # fingerprint travels into logs and request ids.
+        parts.append("content=" + sha256(preview.encode("utf-8")).hexdigest()[:16])
     return "|".join(parts)
 
 
