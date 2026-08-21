@@ -1,4 +1,5 @@
 import { CockpitClient } from "@/components/cockpit/CockpitClient";
+import { SignInGate } from "@/components/SignInGate";
 
 /**
  * One run, at its own URL.
@@ -16,5 +17,11 @@ export default async function RunPage({ params, searchParams }: PageProps<"/run/
   const query = await searchParams;
   const task = typeof query.task === "string" ? query.task : undefined;
 
-  return <CockpitClient threadId={threadId} task={task} />;
+  // The gate wraps the run too, not only the landing page: a run URL is shareable, and an
+  // unauthenticated visitor opening one must meet a sign-in rather than a dead socket.
+  return (
+    <SignInGate>
+      <CockpitClient threadId={threadId} task={task} />
+    </SignInGate>
+  );
 }

@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Inbox Autopilot Bridge",
+  "version": "0.1.0",
+  "description": "Lets Inbox Autopilot drive Gmail in this browser, where you are already signed in. Your mail never leaves this machine in the clear.",
+  "minimum_chrome_version": "116",
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_title": "Inbox Autopilot Bridge",
+    "default_popup": "popup.html"
+  },
+
+  "permissions": ["debugger", "tabs", "storage", "alarms"],
+
+  "host_permissions": ["https://mail.google.com/*"],
+
+  "options_page": "options.html",
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

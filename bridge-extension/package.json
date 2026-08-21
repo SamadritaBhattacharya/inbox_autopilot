@@ -1,0 +1,22 @@
+{
+  "name": "@inbox/bridge-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Drives the user's OWN Chrome via chrome.debugger. The funnel and the PII vault run here, next to the DOM — only tokenized observations cross the wire.",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@inbox/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "typescript": "^5.9.3",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.9"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "protocolVersion": "1.1.0",
+  "contextId": "T1",
+  "title": "Inbox (12) - P2 - Gmail",
+  "viewport": {
+    "width": 1280,
+    "height": 800,
+    "scrollX": 0,
+    "scrollY": 0
+  },
+  "elements": [
+    {
+      "index": 1,
+      "role": "button",
+      "name": "Compose",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 2,
+      "role": "listitem",
+      "name": "C1 Friday demo moved to 4pm",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 3,
+      "role": "listitem",
+      "name": "C2 Invoice 4471 \u2014 ping P1",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 4,
+      "role": "listitem",
+      "name": "C3 Re: onboarding H1",
+      "value": null,
+      "isNew": true
+    }
+  ],
+  "mail": {
+    "view": "inbox",
+    "threadToken": null,
+    "unreadCount": 12,
+    "composeOpen": false
+  },
+  "screenshotRef": null,
+  "changed": null,
+  "droppedCount": 0,
+  "hint": null
+}

@@ -16,7 +16,7 @@ import pytest
 
 from app.agent.state import AgentState
 from app.manager.intent import Action, TaskIntent
-from app.manager.writer import Draft, WRITING_ACTIONS, brief_for, build_writer_node
+from app.manager.writer import WRITING_ACTIONS, Draft, brief_for, build_writer_node
 from app.workers.rendering import task_block
 from tests.fakes.fake_llm import FakeLLMClient, ok
 

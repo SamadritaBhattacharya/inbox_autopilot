@@ -31,7 +31,7 @@ from app.rules.store import InMemoryRulesStore, RulesStore
 from app.security.redaction import install_redaction
 from app.security.tokenizer import PiiTokenizer
 from app.security.vault import SessionPiiVault
-from app.surface.base import EmailSurface
+from app.surface.base import EmailSurface, SurfaceUnavailable
 from app.telemetry.store import InMemoryTrajectoryStore, TrajectoryStore
 
 #: How to release a per-run resource (a browser) when the run ends.
@@ -67,7 +67,42 @@ class AppContainer:
     feedback: FeedbackStore
     surface: EmailSurface | None = None
 
-    async def new_surface(self) -> tuple[EmailSurface | None, Closer]:
+    async def _new_extension_surface(self, owner: str) -> tuple[EmailSurface | None, Closer]:
+        """The user's OWN Chrome, over the bridge.
+
+        No vault and no tokenizer are built here, and that absence is the point: on this
+        surface they live in the extension, so the backend has nothing to resolve a token
+        with. Handing one over "for symmetry" would quietly recreate the thing this
+        architecture exists to prevent.
+        """
+        from app.api.bridge_ws import BRIDGES
+        from app.surface.bridge import BridgeUnavailable
+        from app.surface.extension_surface import ExtensionEmailSurface
+        from app.workers.tools import TOOLSETS, verb_names
+
+        async def noop() -> None:
+            return None
+
+        try:
+            connection = BRIDGES.require(owner)
+        except BridgeUnavailable as exc:
+            raise SurfaceUnavailable(str(exc)) from exc
+
+        # Every verb any worker might bind. The per-turn narrowing still happens in the
+        # reason node; this is the outer bound the extension will refuse beyond.
+        bound: set[str] = set()
+        for tools in TOOLSETS.values():
+            bound |= set(verb_names(tools))
+
+        surface = ExtensionEmailSurface(connection, bound_verbs=bound)
+        await surface.start()
+
+        async def close() -> None:
+            await surface.close()
+
+        return surface, close
+
+    async def new_surface(self, *, owner: str = "local") -> tuple[EmailSurface | None, Closer]:
         """A browser for ONE run, plus how to close it.
 
         Per run, never per process — a surface is one browser session, and sharing it would
@@ -84,6 +119,9 @@ class AppContainer:
 
         if self.surface is not None:
             return self.surface, noop  # injected by a test or a caller; not ours to close
+
+        if self.settings.email_surface == "extension":
+            return await self._new_extension_surface(owner)
 
         if self.settings.email_surface != "playwright":
             return None, noop

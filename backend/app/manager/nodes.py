@@ -11,10 +11,9 @@ never runs and the graph stalls with no error worth reading.
 """
 from __future__ import annotations
 
-import re
-
 import json
 import logging
+import re
 
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
@@ -159,8 +158,12 @@ _DESCRIBABLE_ACTIONS = frozenset({Action.SEND_EMAIL, Action.REPLY, Action.FORWAR
 #: Words that carry no subject matter — the scaffolding of a request rather than its
 #: content. Used only to decide whether a task said anything ABOUT the email.
 _INSTRUCTION_WORDS = frozenset(
-    """a an the to and or for me my please send email mail message write compose draft
-    with about on of it that this then also can you could would should""".split()
+    [
+        "a", "an", "the", "to", "and", "or", "for", "me", "my", "please",
+        "send", "email", "mail", "message", "write", "compose", "draft",
+        "with", "about", "on", "of", "it", "that", "this", "then", "also",
+        "can", "you", "could", "would", "should",
+    ]
 )
 
 _WORD_RE = re.compile(r"[a-zA-Z']+")

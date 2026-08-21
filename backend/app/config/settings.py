@@ -11,16 +11,31 @@ Two standing rules this module exists to enforce:
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 EmailSurfaceName = Literal["fake", "playwright", "extension"]
+AuthMode = Literal["off", "google"]
+
+#: `backend/.env`, anchored to THIS FILE rather than to the working directory.
+#:
+#: A relative `env_file=".env"` is resolved against the CWD, so the same command loaded
+#: different configuration depending on where it was typed. Running `uvicorn` from the repo
+#: root picked up a stale root `.env` with no `CDP_ENDPOINT`, and the backend quietly
+#: launched a fresh empty Chromium instead of attaching to the signed-in browser — which
+#: presents as "Gmail is asking me to sign in", a symptom that points nowhere near the cause.
+#:
+#: One file, one location, whatever directory you are standing in.
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE, extra="ignore", case_sensitive=False
+    )
 
     # ── LLM providers, in fallback order ────────────────────────────────────
     groq_api_key: SecretStr = SecretStr("")
@@ -92,6 +107,39 @@ class Settings(BaseSettings):
     # normally, in their own browser, and the agent joins a session that is already
     # authenticated. It is also the honest shape of the product — the agent operates the
     # user's mailbox in the user's browser.
+    # ── Authentication ──────────────────────────────────────────────────────
+    # "off"    — anyone who can reach the server can run. Correct for localhost, and a
+    #            breach on a public URL. A loud warning fires at startup.
+    # "google" — Sign in with Google, identity only (openid/email/profile). Those scopes
+    #            are NOT restricted, so no Google verification and no CASA assessment.
+    auth_mode: AuthMode = "off"
+    google_client_id: str = ""
+    google_client_secret: SecretStr = SecretStr("")
+    # Must match a redirect URI registered on the OAuth client, exactly.
+    google_redirect_uri: str = "http://localhost:8000/auth/callback"
+    # Where to send the browser after a successful sign-in.
+    cockpit_url: str = "http://localhost:3000"
+    # Signs session tokens, bridge tokens, and the OAuth `state`. Rotating it is the
+    # revocation lever: every session and every paired browser is invalidated at once.
+    auth_secret: SecretStr = SecretStr("")
+
+    # Browsers allowed to call this API. `*` was the old default and it is not a default
+    # any more: with credentials in play it is the difference between a private API and a
+    # public one. Comma-separated.
+    allowed_origins: str = "http://localhost:3000"
+
+    # ── Bridge extension (EMAIL_SURFACE=extension) ──────────────────────────
+    # The shared secret an extension must present on /ws/bridge. EMPTY MEANS THE ROUTE
+    # REFUSES EVERYONE — an unset secret is a misconfiguration, and the failure mode of
+    # guessing "they probably meant open" is somebody else's mailbox.
+    #
+    # One code authenticates a BROWSER, not a user. That is honest for a single-operator
+    # deployment; multi-tenant needs per-user codes hung off a real identity.
+    bridge_pairing_code: SecretStr = SecretStr("")
+    # How long one RPC to the extension may take. Generous: the far end is a real browser
+    # typing real text, and the extension enforces its own tighter per-verb walls.
+    bridge_call_timeout: float = Field(default=90.0, gt=0)
+
     cdp_endpoint: str = ""
     # When the endpoint refuses a connection, start Chrome ourselves rather than making the
     # human remember a second terminal. Off is for CI and for anyone who wants the browser
@@ -115,6 +163,23 @@ class Settings(BaseSettings):
     # ── Persistence ─────────────────────────────────────────────────────────
     checkpoint_dsn: str = "sqlite:///runs/checkpoints.db"
     runs_dir: str = "runs"
+
+    def origins(self) -> list[str]:
+        """The CORS allowlist, as a list."""
+        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
+
+    def auth_ready(self) -> bool:
+        """Is Google sign-in actually usable, or merely switched on?
+
+        Checked at startup rather than discovered on the first login attempt, because a
+        half-configured auth mode fails in the one place a user cannot debug it.
+        """
+        return bool(
+            self.auth_mode == "google"
+            and self.google_client_id
+            and self.google_client_secret.get_secret_value()
+            and self.auth_secret.get_secret_value()
+        )
 
     def configured_providers(self) -> tuple[str, ...]:
         """Which providers actually have a key, in fallback order.

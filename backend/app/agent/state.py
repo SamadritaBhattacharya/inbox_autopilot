@@ -72,9 +72,6 @@ class AgentState(BaseModel):
     reason: str = ""
 
     # ── guards ──────────────────────────────────────────────────────────────
-    #: How many times we have handed the browser back for a sign-in. Bounded, so a run
-    #: cannot pause forever on a login page the human has decided not to fix.
-    signin_asks: int = 0
     stuck_count: int = 0
     nudge_count: int = 0
     #: Rolling window of recent action signatures, for the repetition guard. Catches loops

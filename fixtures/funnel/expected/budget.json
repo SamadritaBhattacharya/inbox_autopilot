@@ -1,0 +1,149 @@
+{
+  "protocolVersion": "1.1.0",
+  "contextId": "T1",
+  "title": "Inbox (12) - P1 - Gmail",
+  "viewport": {
+    "width": 1280,
+    "height": 800,
+    "scrollX": 0,
+    "scrollY": 0
+  },
+  "elements": [
+    {
+      "index": 1,
+      "role": "link",
+      "name": "A reasonably long subject line number 54 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 2,
+      "role": "link",
+      "name": "A reasonably long subject line number 55 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 3,
+      "role": "link",
+      "name": "A reasonably long subject line number 56 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 4,
+      "role": "link",
+      "name": "A reasonably long subject line number 57 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 5,
+      "role": "link",
+      "name": "A reasonably long subject line number 58 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 6,
+      "role": "link",
+      "name": "A reasonably long subject line number 59 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 7,
+      "role": "link",
+      "name": "A reasonably long subject line number 42 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 8,
+      "role": "link",
+      "name": "A reasonably long subject line number 43 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 9,
+      "role": "link",
+      "name": "A reasonably long subject line number 44 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 10,
+      "role": "link",
+      "name": "A reasonably long subject line number 45 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 11,
+      "role": "link",
+      "name": "A reasonably long subject line number 46 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 12,
+      "role": "link",
+      "name": "A reasonably long subject line number 47 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 13,
+      "role": "link",
+      "name": "A reasonably long subject line number 48 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 14,
+      "role": "link",
+      "name": "A reasonably long subject line number 49 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 15,
+      "role": "link",
+      "name": "A reasonably long subject line number 50 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 16,
+      "role": "link",
+      "name": "A reasonably long subject line number 51 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 17,
+      "role": "link",
+      "name": "A reasonably long subject line number 52 about a project update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 18,
+      "role": "link",
+      "name": "A reasonably long subject line number 53 about a project update",
+      "value": null,
+      "isNew": true
+    }
+  ],
+  "mail": {
+    "view": "inbox",
+    "threadToken": null,
+    "unreadCount": 12,
+    "composeOpen": false
+  },
+  "screenshotRef": null,
+  "changed": null,
+  "droppedCount": 0,
+  "hint": null
+}

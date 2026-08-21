@@ -1,0 +1,44 @@
+{
+  "protocolVersion": "1.1.0",
+  "contextId": "T1",
+  "title": "Inbox (12) - P1 - Gmail",
+  "viewport": {
+    "width": 1280,
+    "height": 800,
+    "scrollX": 0,
+    "scrollY": 0
+  },
+  "elements": [
+    {
+      "index": 1,
+      "role": "button",
+      "name": "Archive",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 2,
+      "role": "button",
+      "name": "Left",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 3,
+      "role": "button",
+      "name": "Right",
+      "value": null,
+      "isNew": true
+    }
+  ],
+  "mail": {
+    "view": "inbox",
+    "threadToken": null,
+    "unreadCount": 12,
+    "composeOpen": false
+  },
+  "screenshotRef": null,
+  "changed": null,
+  "droppedCount": 0,
+  "hint": null
+}

@@ -17,7 +17,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from inbox_contracts import ActionCall, ActionResult
+from inbox_contracts import ActionCall, ActionResult, Observation
+from langgraph.types import interrupt
 from pydantic import BaseModel
 
 from app.agent.assessment import derive_outcome, outcome_note, split_assessment
@@ -40,8 +41,6 @@ from app.agent.guards import (
     repetition_nudge,
     stuck_nudge,
 )
-from langgraph.types import interrupt
-
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
 from app.feedback.models import Feedback, FeedbackKind
@@ -72,40 +71,49 @@ MAX_SIGNIN_ASKS = 2
 def build_observe_node(surface: EmailSurface, emitter: EventEmitter):
     """Fresh perception. Rebuilt every turn, never diffed in place."""
 
-    async def observe(state: AgentState) -> dict:
+    async def look() -> Observation:
         await emitter.activity("looking", "reading the screen")
-        try:
-            observation = await surface.observe()
-        except SurfaceUnavailable as exc:
-            await emitter.error(str(exc), ErrorCode.SURFACE_UNAVAILABLE.value)
-            return {
-                "status": "failed",
-                "error_code": ErrorCode.SURFACE_UNAVAILABLE,
-                "finished": True,
-                "success": False,
-                "reason": f"the mailbox became unreachable: {exc}",
-            }
-
+        observation = await surface.observe()
         # Where the browser is, for the human. Best-effort and cockpit-only: a surface with
         # no URL (an API-backed one) simply has nothing to report, and a failure to report
         # it must never cost the run a turn.
         if url := getattr(surface, "current_url", ""):
             await emitter.location(url, observation.title or "")
+        return observation
 
-        # A login wall: hand the browser back to the human rather than fail.
+    async def observe(state: AgentState) -> dict:
+        # ── perceive, pausing for a sign-in if the browser needs one ──
         #
-        # The agent must NOT attempt this itself, and that is not caution — it does not work.
-        # Google refuses its sign-in flow in a browser running a debugging port, so a typed
-        # password ends at "Couldn't sign you in" no matter how well the loop reasons. It is
-        # also the one secret that must never enter this system: a password relayed through
-        # the model's context would land in the trajectory, the logs, and the screencast
-        # frames.
+        # A login wall hands the browser back to the human rather than failing. The agent
+        # must NOT attempt the sign-in itself, and that is not caution — it does not work:
+        # Google refuses its flow in a browser running a debugging port. It is also the one
+        # secret that must never enter this system, since a password relayed through the
+        # model would land in the trajectory, the logs, and the screencast frames.
         #
-        # So the human signs in on Google's real page, in the live browser they are already
-        # watching, and we wait. `interrupt()` checkpoints and stops; resuming re-enters this
-        # node from the top, which re-observes — so the answer is not trusted, it is verified.
-        if observation.mail and observation.mail.view == "signed_out":
-            if state.signin_asks >= MAX_SIGNIN_ASKS:
+        # **The loop is the point.** `interrupt()` raises the first time and RETURNS on
+        # resume, so looping re-observes and verifies the human actually signed in rather
+        # than trusting that they said so. An earlier version returned a delta here instead,
+        # which left `observation` unset — and `reason` then ran against "No page loaded
+        # yet", invented a screen it had never seen, and asked the user to "load the email
+        # client". This node must never hand the loop a state with no observation.
+        asks = 0
+        while True:
+            try:
+                observation = await look()
+            except SurfaceUnavailable as exc:
+                await emitter.error(str(exc), ErrorCode.SURFACE_UNAVAILABLE.value)
+                return {
+                    "status": "failed",
+                    "error_code": ErrorCode.SURFACE_UNAVAILABLE,
+                    "finished": True,
+                    "success": False,
+                    "reason": f"the mailbox became unreachable: {exc}",
+                }
+
+            if not (observation.mail and observation.mail.view == "signed_out"):
+                break
+
+            if asks >= MAX_SIGNIN_ASKS:
                 # Asked and still signed out. Terminating typed beats pausing forever on a
                 # page the human has already declined to fix.
                 reason = (
@@ -134,8 +142,7 @@ def build_observe_node(surface: EmailSurface, emitter: EventEmitter):
                     "task": state.task,
                 }
             )
-            # Reached only on resume: count the ask, then fall through to re-observe.
-            return {"signin_asks": state.signin_asks + 1, "status": "running"}
+            asks += 1
 
         before = page_signature(state.observation)
         after = page_signature(observation)

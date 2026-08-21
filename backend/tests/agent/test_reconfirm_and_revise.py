@@ -16,8 +16,8 @@ from inbox_contracts import ActionCall
 
 from app.llm.base import LLMResult
 from app.manager.draft import Draft
-from app.surface.dispatch import approval_fingerprint
 from app.manager.writer import build_reviser
+from app.surface.dispatch import approval_fingerprint
 from tests.fakes.fake_llm import FakeLLMClient, ok
 
 ORIGINAL = Draft(

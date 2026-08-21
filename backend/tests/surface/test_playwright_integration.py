@@ -364,7 +364,9 @@ async def test_a_real_email_body_types_well_inside_its_wall():
         body = next(e for e in observation.elements if e.name == "Message Body")
 
         started = asyncio.get_running_loop().time()
-        result = await surface.act(ActionCall(name="Type", args={"index": body.index, "text": BODY}))
+        result = await surface.act(
+            ActionCall(name="Type", args={"index": body.index, "text": BODY})
+        )
         elapsed = asyncio.get_running_loop().time() - started
 
         assert result.success, result.reason

@@ -33,6 +33,7 @@ class Cause(StrEnum):
     MODEL_DEGRADED = "model_degraded"
     HUMAN_BLOCKED = "human_blocked"
     SURFACE_GONE = "surface_gone"
+    NOT_SIGNED_IN = "not_signed_in"
     BUDGET_SPENT = "budget_spent"
     UNKNOWN = "unknown"
 
@@ -51,6 +52,9 @@ PLAIN: dict[Cause, str] = {
     Cause.MODEL_DEGRADED: "The model stopped explaining what it was doing.",
     Cause.HUMAN_BLOCKED: "I'm waiting on you, or you declined.",
     Cause.SURFACE_GONE: "I lost the connection to the mailbox.",
+    Cause.NOT_SIGNED_IN: (
+        "That browser isn't signed into Gmail, so there is no mailbox to read."
+    ),
     Cause.BUDGET_SPENT: "I ran out of steps before finishing.",
     Cause.UNKNOWN: "Something went wrong and I couldn't work out why.",
 }
@@ -110,6 +114,13 @@ def classify(
         return Diagnosis.of(Cause.PROVIDER_EXHAUSTED, "every configured provider refused the call")
     if error_code is ErrorCode.SURFACE_UNAVAILABLE:
         return Diagnosis.of(Cause.SURFACE_GONE, "the browser stopped responding")
+    # The most common failure there is, and the most fixable. Left unclassified it fell
+    # through to UNKNOWN — "Something went wrong and I couldn't work out why" — for a
+    # situation the run understood perfectly and could describe in one sentence.
+    if error_code is ErrorCode.NOT_SIGNED_IN:
+        return Diagnosis.of(
+            Cause.NOT_SIGNED_IN, "the browser is showing Google's sign-in page"
+        )
     if error_code in (ErrorCode.APPROVAL_TIMEOUT, ErrorCode.APPROVAL_REJECTED_NO_ALT):
         return Diagnosis.of(Cause.HUMAN_BLOCKED, f"the run ended on {error_code.value}")
     if error_code is ErrorCode.REASONING_MISSING:

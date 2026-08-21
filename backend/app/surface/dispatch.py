@@ -23,19 +23,18 @@ a real bug rather than a hypothetical one:
 from __future__ import annotations
 
 import re
-from hashlib import sha256
-
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Literal
 
 from inbox_contracts import ActionCall, ActionResult, Observation
 
 from app.security.patterns import EMAIL_RE, TOKEN_RE
+from app.security.vault import SessionPiiVault, UnknownToken
 from app.workers.irreversible import (
     GATED_VERBS as _GATED_VERBS,
 )
 from app.workers.irreversible import is_irreversible, target_name
-from app.security.vault import SessionPiiVault, UnknownToken
 
 #: Verbs that cannot be undone. Re-exported from `irreversible`, which is now the single
 #: definition — a second copy here is exactly how the click path came to be ungated.

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Inbox Autopilot Bridge</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --line: color-mix(in srgb, currentColor 14%, transparent);
+        --muted: color-mix(in srgb, currentColor 60%, transparent);
+      }
+      body {
+        width: 300px;
+        margin: 0;
+        padding: 14px;
+        font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      h1 {
+        margin: 0 0 2px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      p {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: none;
+      }
+      .dot[data-state="connected"] { background: #16a34a; }
+      .dot[data-state="connecting"] { background: #ca8a04; }
+      .dot[data-state="rejected"] { background: #dc2626; }
+      label {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 9px;
+        margin-bottom: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+      }
+      button {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
+      .note {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Inbox Autopilot Bridge</h1>
+    <p>Drives Gmail in this browser, where you are already signed in.</p>
+
+    <div class="row">
+      <span class="dot" id="dot"></span>
+      <span id="state">checking…</span>
+    </div>
+
+    <div id="pair-fields">
+      <label for="code">Pairing code</label>
+      <input id="code" placeholder="from the cockpit" autocomplete="off" spellcheck="false" />
+
+      <label for="url">Backend</label>
+      <input id="url" placeholder="ws://localhost:8000/ws/bridge" autocomplete="off" spellcheck="false" />
+    </div>
+
+    <button id="save">Save and connect</button>
+    <button id="unpair" hidden>Disconnect this browser</button>
+
+    <p class="note">
+      Your mail is read on this machine. Addresses and names become tokens before anything
+      is sent to the agent, and nothing is sent without your approval.
+    </p>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

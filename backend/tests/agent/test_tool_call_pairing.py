@@ -15,7 +15,7 @@ The invariant is provider-independent and belongs in a test, not in an adapter w
 """
 from __future__ import annotations
 
-from app.llm.base import LLMResult, Message, ToolCall
+from app.llm.base import Message, ToolCall
 from app.llm.openai_compatible import message_to_openai
 
 

@@ -14,13 +14,12 @@ from __future__ import annotations
 import pytest
 from inbox_contracts import ActionCall, Element, Observation
 
-from tests.fakes.fake_surface import observation as build_observation
-
 from app.agent.routing import ACT, APPROVAL, route_after_reason
 from app.agent.state import AgentState
 from app.security.vault import SessionPiiVault
 from app.surface.dispatch import ActionValidator, DispatchRejected
 from app.workers.approval import is_gated
+from tests.fakes.fake_surface import observation as build_observation
 
 SEND_INDEX = 108
 

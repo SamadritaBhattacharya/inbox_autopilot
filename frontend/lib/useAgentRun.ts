@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { env } from "./env";
+import { socketUrl } from "./session";
 import {
   type Activity,
   bool,
@@ -60,7 +61,9 @@ export function useAgentRun(threadId: string, task?: string) {
   }, []);
 
   useEffect(() => {
-    const socket = new WebSocket(env.NEXT_PUBLIC_WS_URL);
+    // The session rides the handshake as a query parameter: a browser WebSocket cannot set
+    // headers, which is why the backend accepts it there.
+    const socket = new WebSocket(socketUrl(env.NEXT_PUBLIC_WS_URL));
     socketRef.current = socket;
 
     socket.onopen = () => {

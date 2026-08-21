@@ -6,7 +6,7 @@
   "scripts": {
     "setup": "uv sync --project backend && pnpm install && pnpm run gen-contracts",
     "gen-contracts": "uv run --project backend python packages/contracts/scripts/gen.py && node packages/contracts/scripts/gen-zod.mjs && pnpm -C packages/contracts build",
-    "check": "pnpm run gen-contracts && git diff --exit-code -- packages/contracts/schema packages/contracts/src/generated",
+    "check": "pnpm run gen-contracts && pnpm run gen-funnel-goldens && git diff --exit-code -- packages/contracts/schema packages/contracts/src/generated fixtures/funnel",
     "guards": "uv run --project backend python scripts/guards.py",
     "verify": "pnpm run check && pnpm run guards && pnpm run lint:py && pnpm run test && pnpm -C frontend typecheck",
     "test": "pnpm run test:py && pnpm run test:js",
@@ -15,7 +15,8 @@
     "dev:backend": "uv run --project backend uvicorn app.api.main:app --reload",
     "dev:frontend": "pnpm -C frontend dev",
     "lint:py": "uv run --project backend ruff check backend packages/contracts scripts",
-    "bench": "uv run --project backend python -m bench.run_bench"
+    "bench": "uv run --project backend python -m bench.run_bench",
+    "gen-funnel-goldens": "uv run --project backend python scripts/gen_funnel_goldens.py"
   },
   "engines": {
     "node": ">=20"

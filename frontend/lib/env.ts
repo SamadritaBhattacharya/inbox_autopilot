@@ -22,6 +22,23 @@ const envSchema = z.object({
 
 export type CockpitEnv = z.infer<typeof envSchema>;
 
+/**
+ * The backend's HTTP origin, derived from the socket URL rather than configured separately.
+ *
+ * They are the same host by definition — the cockpit talks to exactly one backend — so a
+ * second variable would be a second thing to get out of step, and the module docstring
+ * above is explicit that a second entry is a review-blocking finding. Deriving keeps the
+ * surface at one.
+ */
+export function apiBaseFrom(wsUrl: string): string {
+  const url = new URL(wsUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.pathname = "";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
+
 /** Pure, so it can be tested without touching process.env. */
 export function parseEnv(raw: Record<string, string | undefined>): CockpitEnv {
   const result = envSchema.safeParse(raw);
@@ -39,3 +56,6 @@ export function parseEnv(raw: Record<string, string | undefined>): CockpitEnv {
 export const env: CockpitEnv = parseEnv({
   NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL,
 });
+
+/** `http://localhost:8000` for a socket at `ws://localhost:8000/ws/run`. */
+export const apiBase: string = apiBaseFrom(env.NEXT_PUBLIC_WS_URL);

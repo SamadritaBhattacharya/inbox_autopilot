@@ -26,7 +26,7 @@ from inbox_contracts import ActionCall, Observation
 from pydantic import BaseModel, ConfigDict
 
 from app.surface.dispatch import approval_fingerprint
-from app.workers.irreversible import GATED_VERBS, is_irreversible
+from app.workers.irreversible import is_irreversible
 
 
 class Verdict(StrEnum):

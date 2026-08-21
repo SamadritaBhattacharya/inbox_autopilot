@@ -10,6 +10,8 @@ stops on it.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from inbox_contracts import Element
 
@@ -17,7 +19,7 @@ from app.events.emitter import EventEmitter
 from app.events.sink import BufferSink
 from app.surface.extract import detect_view
 from app.telemetry.records import ErrorCode
-from app.workers.loop import build_observe_node
+from app.workers.loop import MAX_SIGNIN_ASKS, build_observe_node
 from tests.fakes.fake_surface import FakeEmailSurface, observation
 
 
@@ -71,22 +73,78 @@ async def test_a_login_wall_hands_the_browser_back_instead_of_guessing():
 
 
 async def test_it_gives_up_typed_rather_than_pausing_forever():
-    """A run that can pause indefinitely on a page nobody will fix is a hung run."""
-    surface = FakeEmailSurface(
-        [observation(Element(index=1, role="button", name="Try again"), view="signed_out")]
+    """A run that can pause indefinitely on a page nobody will fix is a hung run.
+
+    Driven through the real graph, because the give-up counter is positional: `interrupt()`
+    raises the first time and RETURNS on resume, so the node counts how many times it has
+    already asked by how far the replay gets. That is only observable with the runtime.
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+
+    from app.agent.graph import build_manager_graph
+    from app.rules.store import NoRules
+    from tests.fakes.fake_llm import FakeLLMClient, drafted, ok
+    from tests.fakes.fake_surface import FakeEmailSurface
+
+    def signed_out_page():
+        return observation(
+            Element(index=1, role="button", name="Sign in"), view="signed_out"
+        )
+
+    # Never signs in, however many times we ask.
+    surface = FakeEmailSurface([signed_out_page() for _ in range(12)])
+    llm = FakeLLMClient(
+        [
+            ok(
+                json.dumps(
+                    {"action": "summarize", "slots": {"scope": "inbox"}, "confidence": 0.95}
+                )
+            ),
+            ok("decision"),
+            ok("Read the inbox"),
+            drafted(),
+        ]
     )
-    observe = build_observe_node(surface, EventEmitter(BufferSink()))
-
-    from app.agent.state import AgentState
-    from app.workers.loop import MAX_SIGNIN_ASKS
-
-    delta = await observe(
-        AgentState(task="summarize my inbox", thread_id="so-2", signin_asks=MAX_SIGNIN_ASKS)
+    graph = build_manager_graph(
+        llm=llm, surface=surface, rules=NoRules(), checkpointer=InMemorySaver()
     )
+    config = {"configurable": {"thread_id": "so-give-up"}}
 
-    assert delta["finished"] is True
-    assert delta["success"] is False
-    assert delta["error_code"] is ErrorCode.NOT_SIGNED_IN
+    result = await graph.ainvoke({"task": "summarize my inbox", "thread_id": "so-give-up"}, config)
+    assert "__interrupt__" in result, "the first sight of a login wall must PAUSE"
+
+    # The human says they signed in. They did not.
+    for _ in range(MAX_SIGNIN_ASKS):
+        result = await graph.ainvoke(Command(resume="done"), config)
+
+    # Typed, and NOT a fresh pause on the same wall. It lands in the recovery layer, which
+    # offers "sign in, then retry" — the run stops being the agent's problem and becomes a
+    # question with an obvious answer.
+    assert result["error_code"] is ErrorCode.NOT_SIGNED_IN
+
+
+def test_a_login_wall_is_diagnosed_by_name():
+    """It fell through to UNKNOWN once — "Something went wrong and I couldn't work out
+    why" — for the most common and most fixable failure there is."""
+    from app.recovery.causes import PLAIN, Cause, classify
+    from app.recovery.registry import CuratedSkillRegistry
+
+    diagnosis = classify(error_code=ErrorCode.NOT_SIGNED_IN)
+
+    assert diagnosis.cause is Cause.NOT_SIGNED_IN
+    assert "signed into Gmail" in PLAIN[diagnosis.cause]
+
+    recommended = CuratedSkillRegistry().strategies_for(diagnosis.cause)[0]
+    assert recommended.name == "sign_in"
+
+
+def test_the_agent_is_never_told_to_sign_in_itself():
+    """Google refuses its flow under automation, and a password relayed through the model
+    would land in the trajectory, the logs, and the screencast frames."""
+    from app.recovery.strategies import SIGN_IN
+
+    assert "Do NOT try to sign in yourself" in SIGN_IN.guidance()
 
 
 async def test_a_signed_in_inbox_keeps_going():

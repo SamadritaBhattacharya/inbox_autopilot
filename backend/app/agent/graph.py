@@ -42,10 +42,10 @@ from app.agent.routing import (
     OBSERVE,
     OPTIONS,
     PLANNER,
-    WRITER,
     REASON,
     ROUTER,
     VERIFY,
+    WRITER,
     route_after_act,
     route_after_approval,
     route_after_diagnose,
@@ -63,13 +63,13 @@ from app.events.sink import NullSink
 from app.feedback.store import FeedbackStore
 from app.llm.base import LLMClient
 from app.manager.intent import Action
-from app.manager.writer import build_reviser, build_writer_node
 from app.manager.nodes import (
     build_context_gate_node,
     build_intake_node,
     build_planner_node,
     build_router_node,
 )
+from app.manager.writer import build_reviser, build_writer_node
 from app.recovery.registry import CuratedSkillRegistry
 from app.rules.store import InMemoryRulesStore, RulesStore
 from app.surface.base import EmailSurface

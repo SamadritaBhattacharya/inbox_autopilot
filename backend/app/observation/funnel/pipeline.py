@@ -152,6 +152,10 @@ class ObservationFunnel:
         shown = {element.index for element in listed}
         geometry = {i: point for i, point in geometry.items() if i in shown}
 
+        # Thread token FIRST, then the context id. The order is observable — the vault
+        # numbers tokens sequentially — and the TypeScript funnel in `bridge-extension/`
+        # must mint them the same way or the two surfaces describe the same page
+        # differently. `fixtures/funnel/` is what holds them together.
         thread_token = (
             self._tokenizer.tokenize_identifier(meta.thread_ref) if meta.thread_ref else None
         )

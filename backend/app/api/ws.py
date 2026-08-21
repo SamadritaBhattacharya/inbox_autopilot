@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 RUNS = RunManager()
 
 
-async def drive(run: Run, container: AppContainer, task: str) -> None:
+async def drive(run: Run, container: AppContainer, task: str, *, owner: str = "local") -> None:
     """Run the graph to completion, forwarding interrupts to the cockpit.
 
     Emits into the run's fanout (buffer + any attached socket) rather than to a socket
@@ -42,7 +42,7 @@ async def drive(run: Run, container: AppContainer, task: str) -> None:
     # fail, so a crash mid-setup still closes it — a leaked Chromium is invisible until the
     # host runs out of memory.
     try:
-        surface, close_surface = await container.new_surface()
+        surface, close_surface = await container.new_surface(owner=owner)
     except Exception as exc:
         await emitter.error(f"could not start the browser: {exc}")
         await emitter.run_complete(success=False, reason=str(exc))
@@ -138,8 +138,19 @@ async def drive(run: Run, container: AppContainer, task: str) -> None:
             run.cleanup = None
 
 
-async def ws_run(websocket: WebSocket, container: AppContainer | None = None) -> None:
-    """One cockpit connection. May start, watch, steer, and stop runs."""
+async def ws_run(
+    websocket: WebSocket,
+    container: AppContainer | None = None,
+    *,
+    owner: str = "local",
+) -> None:
+    """One cockpit connection. May start, watch, steer, and stop runs.
+
+    `owner` is the authenticated user, resolved at the route before this is called. It is
+    what a run uses to find *its* browser: with several people connected, the bridge
+    registry must hand back the extension belonging to whoever asked, and a run that looked
+    up "the bridge" instead of "this user's bridge" would drive a stranger's mailbox.
+    """
     await websocket.accept()
     container = container or build_container()
     viewing: str | None = None
@@ -173,7 +184,7 @@ async def ws_run(websocket: WebSocket, container: AppContainer | None = None) ->
                 # stops being a faithful reproduction of the live stream.
                 await run.emitter.status("starting", f"run {thread_id}")
                 run.task = asyncio.create_task(
-                    drive(run, container, str(message.get("task", "")))
+                    drive(run, container, str(message.get("task", "")), owner=owner)
                 )
 
             elif kind == "attach":

@@ -149,6 +149,20 @@ RESTART_SURFACE = _Strategy(
     _guidance="The mailbox connection is gone. This run cannot continue; start a fresh one.",
 )
 
+SIGN_IN = _Strategy(
+    name="sign_in",
+    label="Sign into Gmail in that browser, then retry",
+    detail="The browser is on Google's sign-in page, so there is no mailbox to read yet.",
+    _fits={Cause.NOT_SIGNED_IN: 0.98, Cause.SURFACE_GONE: 0.2},
+    # The agent must never attempt this itself: Google refuses its sign-in flow in a browser
+    # under automation, and a password relayed through the model would land in the
+    # trajectory, the logs, and the screencast frames. The remedy is the human's to perform.
+    _guidance=(
+        "Do NOT try to sign in yourself — it does not work, and a password must never pass "
+        "through you. Call Complete(success=false) and say the browser needs signing into."
+    ),
+)
+
 ASK_USER = _Strategy(
     name="ask_user",
     label="Ask me what to do",
@@ -174,6 +188,7 @@ ALL_STRATEGIES: tuple[_Strategy, ...] = (
     NOTE_AND_CONTINUE,
     SWITCH_PROVIDER,
     RESTART_SURFACE,
+    SIGN_IN,
     ASK_USER,
 )
 

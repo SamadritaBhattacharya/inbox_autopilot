@@ -19,6 +19,7 @@ own can run side by side.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -181,13 +182,11 @@ async def port_is_open(host: str, port: int, *, timeout: float = 0.5) -> bool:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
-    except (OSError, asyncio.TimeoutError):
+    except (TimeoutError, OSError):
         return False
     writer.close()
-    try:
+    with contextlib.suppress(OSError):
         await writer.wait_closed()
-    except OSError:
-        pass
     return True
 
 

@@ -12,6 +12,9 @@ dependencies = [
     "httpx>=0.28.1",
     "playwright>=1.62.0",
     "langgraph>=1.2.11",
+    # Verifying Google ID tokens locally (RS256 + JWKS) rather than calling Google on
+    # every sign-in. One well-maintained dependency beats a network hop in the auth path.
+    "pyjwt[crypto]>=2.10",
 ]
 
 [dependency-groups]

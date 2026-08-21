@@ -1,4 +1,6 @@
 import { PROTOCOL_VERSION } from "@inbox/contracts";
+import { PairBrowser } from "@/components/PairBrowser";
+import { SignInGate } from "@/components/SignInGate";
 import { StartForm } from "@/components/StartForm";
 import { env } from "@/lib/env";
 
@@ -34,6 +36,14 @@ const PROMISES = [
 
 export default function Home() {
   return (
+    <SignInGate>
+      <HomeContent />
+    </SignInGate>
+  );
+}
+
+function HomeContent() {
+  return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-14">
       <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-faint">
         Browser-driven email agent
@@ -52,6 +62,10 @@ export default function Home() {
 
       <div className="mt-8">
         <StartForm examples={EXAMPLES} />
+      </div>
+
+      <div className="mt-8">
+        <PairBrowser />
       </div>
 
       <ul className="mt-12 grid gap-3 sm:grid-cols-3">

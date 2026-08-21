@@ -101,7 +101,10 @@ EXTRACT_JS = """
   // place the guarantee is total. The PII vault cannot help: it tokenizes so values can be
   // resolved again later, which is the opposite of what a password needs.
   const SECRET_TYPES = new Set(['password']);
-  const SECRET_WORDS = /pass(word|wd)?|pwd|otp|one-?time|2fa|mfa|totp|cvv|cvc|secret|token|credit-?card|cc-?num/i;
+  const SECRET_WORDS = new RegExp(
+    'pass(word|wd)?|pwd|otp|one-?time|2fa|mfa|totp|cvv|cvc|secret|token|credit-?card|cc-?num',
+    'i'
+  );
   const SECRET_AUTOCOMPLETE = /password|one-time-code|cc-number|cc-csc/i;
 
   function isSecret(el) {

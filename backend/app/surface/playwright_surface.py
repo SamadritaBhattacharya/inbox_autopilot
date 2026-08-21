@@ -36,8 +36,8 @@ from app.security.tokenizer import PiiTokenizer
 from app.security.vault import SessionPiiVault
 from app.surface.base import SurfaceUnavailable
 from app.surface.dispatch import ActionValidator, DispatchRejected, ResolvedAction
-from app.workers.irreversible import is_irreversible
 from app.surface.extract import EXTRACT_JS, MAX_NODES, parse_elements, parse_meta
+from app.workers.irreversible import is_irreversible
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright.async_api import Page
