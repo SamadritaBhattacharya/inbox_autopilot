@@ -18,7 +18,7 @@ from app.llm.base import (
     ProviderRateLimited,
     ProviderUnavailable,
 )
-from app.llm.fallback import FallbackLLMClient
+from app.llm.fallback import COOLDOWN_CAP, FallbackLLMClient
 from tests.fakes.fake_llm import FakeLLMClient, boom, ok
 
 MESSAGES = [Message(role="user", content="archive the newsletters")]
@@ -199,3 +199,99 @@ async def test_every_attempt_is_metered_including_the_failed_ones():
     assert [a.provider for a in chain.attempts] == ["groq", "openrouter"]
     assert [a.ok for a in chain.attempts] == [False, True]
     assert chain.attempts[-1].usage.input_tokens == 7
+
+
+# ── a provider that says "not for 20 minutes" is believed ───────────────────
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float) -> None:
+        self.t += seconds
+
+
+def capped(retry_after: float | None = 600.0) -> ProviderQuotaExhausted:
+    return ProviderQuotaExhausted("groq", "daily token cap", retry_after=retry_after)
+
+
+def chain_with(groq_script, backup_script, clock):
+    groq = FakeLLMClient(groq_script, name="groq")
+    backup = FakeLLMClient(backup_script, name="openrouter")
+    chain = FallbackLLMClient(
+        [groq, backup], max_retries=0, sleep=RecordingSleep(), now=clock
+    )
+    return chain, groq, backup
+
+
+async def test_a_benched_provider_is_not_asked_again():
+    """Observed live: Groq hit its daily token cap and said "try again in 33m". The chain
+    asked it anyway on every turn of every run — a guaranteed 429 and its full round trip
+    added to each step, and a log so full of identical warnings that real failures hid."""
+    clock = FakeClock()
+    chain, groq, backup = chain_with(
+        [capped(), capped()], [ok("first"), ok("second")], clock
+    )
+
+    await complete(chain)
+    await complete(chain)
+
+    assert groq.call_count == 1, "a benched provider must not be re-asked"
+    assert backup.call_count == 2
+
+
+async def test_the_bench_expires():
+    """Benched, not banned. A cap that has rolled over must return to the chain."""
+    clock = FakeClock()
+    chain, groq, _ = chain_with(
+        [capped(retry_after=60.0), ok("back")], [ok("fallback")], clock
+    )
+
+    await complete(chain)
+    clock.advance(61.0)
+
+    assert (await complete(chain)).text == "back"
+    assert groq.call_count == 2
+
+
+async def test_a_failure_with_no_stated_wait_is_not_benched():
+    """Benching on a guess would drop a working provider over a single blip."""
+    clock = FakeClock()
+    chain, _, _ = chain_with(
+        [capped(retry_after=None), ok("recovered")], [ok("fallback")], clock
+    )
+
+    await complete(chain)
+
+    assert (await complete(chain)).text == "recovered"
+
+
+async def test_an_enormous_wait_is_capped():
+    """A daily cap can report tens of minutes; honouring it verbatim keeps a provider out
+    long after the rollover."""
+    clock = FakeClock()
+    chain, _, _ = chain_with([capped(retry_after=86_400.0), ok("back")], [ok("f")], clock)
+
+    await complete(chain)
+    clock.advance(COOLDOWN_CAP + 1)
+
+    assert (await complete(chain)).text == "back"
+
+
+async def test_success_clears_the_bench():
+    """A topped-up key should not stay benched until a timer we chose."""
+    clock = FakeClock()
+    chain, groq, _ = chain_with(
+        [capped(retry_after=30.0), ok("back"), ok("again")], [ok("fallback")], clock
+    )
+
+    await complete(chain)
+    clock.advance(31.0)
+    await complete(chain)
+    await complete(chain)
+
+    assert groq.call_count == 3

@@ -24,7 +24,11 @@ from app.llm.base import (
     ProviderUnavailable,
     ToolCall,
 )
-from app.llm.openai_compatible import OpenAICompatibleClient, tool_to_openai_schema
+from app.llm.openai_compatible import (
+    OpenAICompatibleClient,
+    message_to_openai,
+    tool_to_openai_schema,
+)
 
 MESSAGES = [Message(role="user", content="archive the newsletters")]
 
@@ -357,3 +361,70 @@ def test_tool_schema_shape():
     assert schema["type"] == "function"
     assert schema["function"]["name"] == "Archive"
     assert "title" not in schema["function"]["parameters"]
+
+
+# ── tool results must name their function ───────────────────────────────────
+
+
+class TestToolResultNaming:
+    """Gemini is reached through its OpenAI-compatible shim, which translates a `tool`
+    message into a Gemini `function_response` — where `name` is REQUIRED. OpenAI does not
+    ask for it, so the omission was invisible on Groq and OpenRouter and killed every run
+    that fell through to Gemini with:
+
+        GenerateContentRequest.contents[3].parts[0].function_response.name:
+        Name cannot be empty
+
+    An empty name fails the whole request; a merely imprecise one still replays. So this
+    always emits something.
+    """
+
+    def test_a_tool_result_carries_a_name(self):
+        payload = message_to_openai(
+            Message(role="tool", content="archived", tool_call_id="Archive")
+        )
+
+        assert payload["name"] == "Archive"
+
+    def test_an_explicit_name_wins(self):
+        payload = message_to_openai(
+            Message(role="tool", content="ok", tool_call_id="call_7", name="Archive")
+        )
+
+        assert payload["name"] == "Archive"
+
+    def test_a_tool_result_with_nothing_to_go_on_still_names_something(self):
+        """Never empty. An imprecise name replays; an empty one 400s the request."""
+        payload = message_to_openai(Message(role="tool", content="ok"))
+
+        assert payload["name"], "a tool result must never carry an empty name"
+
+    def test_ordinary_messages_gain_no_name(self):
+        """The fallback is scoped to tool results. A `name` on a user turn changes how some
+        providers attribute the message."""
+        for role in ("user", "assistant", "system"):
+            payload = message_to_openai(Message(role=role, content="hello"))
+
+            assert "name" not in payload, f"{role} message should carry no name"
+
+    def test_a_tool_call_never_replays_with_an_empty_id(self):
+        """Gemini does not return OpenAI-style call ids, so replaying its own reply back to
+        it would send `"id": ""` — the same empty-required-field 400, one field over."""
+        payload = message_to_openai(
+            Message(
+                role="assistant",
+                tool_calls=[ToolCall(id="", name="Archive", args={"index": 3})],
+            )
+        )
+
+        assert payload["tool_calls"][0]["id"] == "Archive"
+
+    def test_a_real_call_id_is_preserved(self):
+        payload = message_to_openai(
+            Message(
+                role="assistant",
+                tool_calls=[ToolCall(id="call_abc", name="Archive", args={})],
+            )
+        )
+
+        assert payload["tool_calls"][0]["id"] == "call_abc"

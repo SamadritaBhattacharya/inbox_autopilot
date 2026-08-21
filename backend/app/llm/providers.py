@@ -43,11 +43,26 @@ EXTRA_HEADERS: dict[str, dict[str, str]] = {
 }
 
 
+ROLES: tuple[Role, ...] = ("classifier", "executor", "validator")
+
+
 def models_from_settings(settings: Settings) -> dict[Role, str]:
+    """The generic roster — what a provider gets when it has no override of its own."""
+    return {role: getattr(settings, f"llm_model_{role}") for role in ROLES}
+
+
+def models_for(provider: str, settings: Settings) -> dict[Role, str]:
+    """This provider's roster: its own slugs where set, the generic ones otherwise.
+
+    **Model ids are not portable, and the chain used to assume they were.** Groq and
+    OpenRouter both host the same open models, so one roster worked right up until the
+    fallback reached Gemini — which 404s a model that never existed there, at the exact
+    moment the other two are out of quota.
+    """
+    generic = models_from_settings(settings)
     return {
-        "classifier": settings.llm_model_classifier,
-        "executor": settings.llm_model_executor,
-        "validator": settings.llm_model_validator,
+        role: getattr(settings, f"{provider}_model_{role}", "") or generic[role]
+        for role in ROLES
     }
 
 
@@ -65,12 +80,42 @@ def build_provider(
         name=name,
         base_url=BASE_URLS[name],
         api_key=key,
-        models=models_from_settings(settings),
+        models=models_for(name, settings),
         http=http,
         temperature=settings.llm_temperature,
         max_output_tokens=settings.llm_max_output_tokens,
         timeout=settings.llm_request_timeout,
         extra_headers=EXTRA_HEADERS.get(name),
+    )
+
+
+#: Providers whose slugs are bare names. A namespaced id like `vendor/model` is a Groq and
+#: OpenRouter convention, so seeing one here means a roster was copied across providers.
+_BARE_SLUG_PROVIDERS = frozenset({"gemini"})
+
+
+def _warn_on_foreign_slugs(provider: str, models: dict[Role, str]) -> None:
+    """Say at STARTUP that a provider has been handed another provider's model ids.
+
+    Without this the mistake surfaces as a 404 from deep in the fallback chain — which only
+    happens once the providers ahead of it are rate-limited, i.e. at the busiest moment of
+    the longest run, hours after the config was written. Naming it at boot costs nothing.
+
+    A warning rather than an error: rosters change, this heuristic is a guess about naming
+    conventions, and refusing to start over a guess is worse than a loud log line.
+    """
+    if provider not in _BARE_SLUG_PROVIDERS:
+        return
+    foreign = {role: slug for role, slug in models.items() if "/" in slug}
+    if not foreign:
+        return
+    logger.warning(
+        "%s is configured with namespaced model ids (%s), which are Groq/OpenRouter slugs "
+        "and will 404 there. Set %s_MODEL_EXECUTOR (and _CLASSIFIER, _VALIDATOR) in .env to "
+        "model names this provider actually serves.",
+        provider,
+        ", ".join(f"{role}={slug}" for role, slug in sorted(foreign.items())),
+        provider.upper(),
     )
 
 
@@ -95,6 +140,8 @@ def build_llm_client(
 
     ordered = [name for name in PROVIDER_ORDER if name in configured]
     logger.info("LLM fallback chain: %s", " -> ".join(ordered))
+    for name in ordered:
+        _warn_on_foreign_slugs(name, models_for(name, settings))
 
     return FallbackLLMClient(
         [build_provider(name, settings, http=http) for name in ordered],

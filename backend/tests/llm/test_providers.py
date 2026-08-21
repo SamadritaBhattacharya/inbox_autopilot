@@ -1,6 +1,8 @@
 """Chain construction, and the guardrail that model slugs stay configuration."""
 from __future__ import annotations
 
+import logging
+
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ from app.llm.providers import (
     PROVIDER_ORDER,
     build_llm_client,
     build_provider,
+    models_for,
 )
 
 APP_DIR = Path(__file__).resolve().parents[2] / "app"
@@ -121,3 +124,75 @@ def test_no_free_tier_model_id_is_pinned_anywhere():
         if ":free" in path.read_text(encoding="utf-8")
     ]
     assert not offenders, f"pinned :free model id in {offenders}"
+
+
+# ── model ids are not portable ──────────────────────────────────────────────
+
+
+class TestPerProviderRosters:
+    """One roster for three providers was a latent 404.
+
+    Groq and OpenRouter both host `openai/gpt-oss-120b`, so a single set of slugs worked —
+    right up until the chain fell through to Gemini, which 404s a model that never existed
+    there. That only happens once the two providers ahead are rate-limited: the failure is
+    invisible in testing and arrives at the busiest moment of the longest run.
+    """
+
+    def test_a_provider_without_overrides_uses_the_generic_roster(self):
+        settings = Settings(_env_file=None, groq_api_key="k")
+
+        assert models_for("groq", settings)["executor"] == settings.llm_model_executor
+
+    def test_a_provider_override_wins(self):
+        settings = Settings(
+            _env_file=None, gemini_api_key="k", gemini_model_executor="gemini-3.6-flash"
+        )
+
+        assert models_for("gemini", settings)["executor"] == "gemini-3.6-flash"
+
+    def test_overrides_are_per_role(self):
+        """Overriding the executor must not silently drag the classifier with it."""
+        settings = Settings(
+            _env_file=None, gemini_api_key="k", gemini_model_executor="gemini-3.6-flash"
+        )
+
+        models = models_for("gemini", settings)
+
+        assert models["executor"] == "gemini-3.6-flash"
+        assert models["classifier"] == settings.llm_model_classifier
+
+    def test_one_providers_override_does_not_leak_to_another(self):
+        settings = Settings(
+            _env_file=None,
+            groq_api_key="k",
+            gemini_api_key="k",
+            gemini_model_executor="gemini-3.6-flash",
+        )
+
+        assert models_for("groq", settings)["executor"] == settings.llm_model_executor
+
+    def test_a_foreign_slug_is_reported_at_startup(self, caplog):
+        """Named at boot, or discovered as a 404 three fallbacks deep hours later."""
+        settings = Settings(_env_file=None, groq_api_key="k", gemini_api_key="k")
+
+        with caplog.at_level(logging.WARNING):
+            build_llm_client(settings)
+
+        assert "namespaced model ids" in caplog.text
+
+    def test_a_correctly_configured_chain_is_quiet(self, caplog):
+        """A warning that fires when nothing is wrong gets filtered out, taking the real
+        one with it."""
+        settings = Settings(
+            _env_file=None,
+            groq_api_key="k",
+            gemini_api_key="k",
+            gemini_model_classifier="gemini-3.5-flash-lite",
+            gemini_model_executor="gemini-3.6-flash",
+            gemini_model_validator="gemini-3.5-flash-lite",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            build_llm_client(settings)
+
+        assert "namespaced model ids" not in caplog.text

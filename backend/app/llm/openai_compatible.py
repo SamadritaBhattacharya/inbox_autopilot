@@ -77,7 +77,11 @@ def message_to_openai(message: Message) -> dict:
     if message.tool_calls:
         payload["tool_calls"] = [
             {
-                "id": call.id,
+                # Never empty, for the same reason a tool result's name is never empty:
+                # Gemini does not return OpenAI-style call ids, so replaying its own reply
+                # back to it sends `"id": ""` and the request is rejected. Falling back to
+                # the verb keeps call and result pairable, which is all the id is for.
+                "id": call.id or call.name or "call",
                 "type": "function",
                 "function": {"name": call.name, "arguments": json.dumps(call.args)},
             }
@@ -87,6 +91,18 @@ def message_to_openai(message: Message) -> dict:
         payload["tool_call_id"] = message.tool_call_id
     if message.name:
         payload["name"] = message.name
+    elif message.role == "tool":
+        # A tool result MUST carry a non-empty name, even though OpenAI does not ask for
+        # one. Gemini is reached through its OpenAI-compatible shim, which translates this
+        # message into a Gemini `function_response` — and that field is required there. Omit
+        # it and the run dies mid-loop with
+        # "contents[3].parts[0].function_response.name: Name cannot be empty", which names
+        # neither the message nor the provider quirk that caused it.
+        #
+        # `tool_call_id` is the right fallback because this codebase already puts the verb
+        # name there. The literal is a last resort: a non-empty wrong name still lets the
+        # conversation replay, where an empty one fails the whole request.
+        payload["name"] = message.tool_call_id or "tool"
     return payload
 
 

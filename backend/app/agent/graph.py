@@ -93,6 +93,10 @@ ALLOWED_CHECKPOINT_MODULES = (
     ("app.manager.intent", "TaskIntent"),
     ("app.manager.intent", "Route"),
     ("app.manager.intent", "Plan"),
+    # Without this the draft is silently DROPPED on every resume — and the approval gate is
+    # a resume, so the words the human just approved would vanish on the way back into the
+    # loop. It fails as a log line, not an exception, which is worse.
+    ("app.manager.draft", "Draft"),
     ("app.telemetry.records", "StepRecord"),
     ("app.telemetry.records", "ErrorCode"),
     ("app.telemetry.records", "Usage"),

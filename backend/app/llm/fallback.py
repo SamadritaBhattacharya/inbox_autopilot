@@ -65,6 +65,12 @@ class Attempt:
     error: str | None = None
 
 
+#: Longest a provider stays benched. A daily cap can report tens of minutes; honouring that
+#: verbatim would keep it out of the chain long after a rollover, so the wait is capped and
+#: the provider gets another look.
+COOLDOWN_CAP = 300.0
+
+
 class FallbackLLMClient:
     """Try each provider in order. Satisfies `LLMClient`, composed of `LLMClient`s."""
 
@@ -74,6 +80,7 @@ class FallbackLLMClient:
         *,
         max_retries: int = 2,
         sleep: SleepFn | None = None,
+        now: Callable[[], float] | None = None,
         on_attempt: Callable[[Attempt], None] | None = None,
         recent_window: int = 100,
     ) -> None:
@@ -91,6 +98,9 @@ class FallbackLLMClient:
         self._on_attempt = on_attempt
         #: A bounded recent window, for debugging and tests only — NOT the metering record.
         self.attempts: deque[Attempt] = deque(maxlen=recent_window)
+        #: provider name -> monotonic time it may be tried again. Empty is the normal state.
+        self._cooling_until: dict[str, float] = {}
+        self._now = now or time.monotonic
 
     async def complete(
         self,
@@ -102,8 +112,17 @@ class FallbackLLMClient:
         failures: list[ProviderError] = []
 
         for provider in self._providers:
+            if (until := self._cooling_until.get(provider.name, 0.0)) > self._now():
+                # It told us how long it would be unavailable. Asking anyway buys a
+                # guaranteed 429 and its full round trip on EVERY turn of EVERY run for the
+                # next half hour — pure latency, and it drowns the log in warnings that all
+                # say the same thing.
+                logger.debug(
+                    "skipping %s for another %.0fs", provider.name, until - self._now()
+                )
+                continue
             try:
-                return await self._attempt_provider(
+                result = await self._attempt_provider(
                     provider, role=role, messages=messages, tools=tools
                 )
             except ProviderError as exc:
@@ -112,9 +131,28 @@ class FallbackLLMClient:
                     # Our bug, not theirs. Surface it now rather than trying two more
                     # providers that will fail the same way.
                     raise
+                self._cool_down(exc)
                 logger.warning("provider %s exhausted, falling through: %s", exc.provider, exc)
+            else:
+                # Success clears any cooldown: a daily cap that has rolled over, or a key
+                # that was topped up, should not stay benched until a timer we guessed.
+                self._cooling_until.pop(provider.name, None)
+                return result
 
         raise AllProvidersExhausted(failures)
+
+    def _cool_down(self, exc: ProviderError) -> None:
+        """Bench a provider for as long as it said, and no longer.
+
+        Only when it actually told us. A provider that failed for an unstated reason gets
+        retried next turn — benching on a guess would drop a working provider out of the
+        chain over one blip.
+        """
+        if not exc.retry_after:
+            return
+        wait = min(float(exc.retry_after), COOLDOWN_CAP)
+        self._cooling_until[exc.provider] = self._now() + wait
+        logger.info("benching %s for %.0fs (it asked)", exc.provider, wait)
 
     async def _attempt_provider(
         self,

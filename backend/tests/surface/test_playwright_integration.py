@@ -340,3 +340,69 @@ async def test_an_ordinary_field_is_still_readable():
     assert any(
         element.value and "•" not in element.value for element in observation.elements
     ), "every value was redacted; the guard is too broad"
+
+
+# ── typing a real email body ────────────────────────────────────────────────
+
+COMPOSE = (Path(__file__).resolve().parents[1] / "fixtures" / "compose.html").as_uri()
+
+BODY = (
+    "Good afternoon, I hope your day is going well. Just a quick reminder that your "
+    "dedication continues to make a difference, and I'm confident you'll achieve your "
+    "goals. Keep up the great work!"
+)
+
+
+async def test_a_real_email_body_types_well_inside_its_wall():
+    """The bug: 190 characters key-by-key is three CDP round trips per character, which
+    took ~9.5s and breached the fixed 10s wall. The agent then "helpfully" cleared the
+    field and retried in chunks, breaching it again — writing correct text and deleting it,
+    forever."""
+    surface, close = await launch_surface(headless=True, start_url=COMPOSE)
+    try:
+        observation = await surface.observe()
+        body = next(e for e in observation.elements if e.name == "Message Body")
+
+        started = asyncio.get_running_loop().time()
+        result = await surface.act(ActionCall(name="Type", args={"index": body.index, "text": BODY}))
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert result.success, result.reason
+        assert elapsed < 5.0, f"typing {len(BODY)} chars took {elapsed:.1f}s"
+    finally:
+        await close()
+
+
+async def test_the_body_actually_lands_verbatim():
+    """Fast is worthless if the text arrives mangled — the human approves these words."""
+    surface, close = await launch_surface(headless=True, start_url=COMPOSE)
+    try:
+        observation = await surface.observe()
+        body = next(e for e in observation.elements if e.name == "Message Body")
+        await surface.act(ActionCall(name="Type", args={"index": body.index, "text": BODY}))
+
+        typed = await surface._page.eval_on_selector("#body", "el => el.innerText")
+    finally:
+        await close()
+
+    assert typed.strip() == BODY
+
+
+async def test_a_short_field_still_types_key_by_key():
+    """Recipient autocomplete builds its chip from keystrokes, so short fields must NOT be
+    bulk-inserted — which is the whole reason for the threshold."""
+    surface, close = await launch_surface(headless=True, start_url=COMPOSE)
+    try:
+        observation = await surface.observe()
+        to = next(e for e in observation.elements if e.name == "To")
+        keys: list[str] = []
+        await surface._page.expose_function("_record", lambda k: keys.append(k))
+        await surface._page.eval_on_selector(
+            "#to", "el => el.addEventListener('keydown', e => window._record(e.key))"
+        )
+
+        await surface.act(ActionCall(name="Type", args={"index": to.index, "text": "a@b.com"}))
+    finally:
+        await close()
+
+    assert len(keys) >= 7, f"expected a keydown per character, saw {keys}"

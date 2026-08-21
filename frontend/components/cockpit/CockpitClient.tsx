@@ -101,7 +101,7 @@ export function CockpitClient({ threadId, task }: { threadId: string; task?: str
     // slides off the top as the transcript grows. Only the transcript scrolls.
     <main className="fixed inset-0 flex flex-col gap-3 overflow-hidden p-3 lg:flex-row lg:gap-4 lg:p-4">
       {/* Live browser: on top on mobile, the hero on the right at desktop widths. */}
-      <section className="h-[38vh] min-h-0 min-w-0 shrink-0 lg:order-2 lg:h-auto lg:flex-1">
+      <section className="h-[60vh] [38vh] min-h-0 min-w-0 shrink-0 lg:order-2 lg:h-auto lg:flex-1">
         <Viewport
           subscribeFrame={subscribeFrame}
           status={status}

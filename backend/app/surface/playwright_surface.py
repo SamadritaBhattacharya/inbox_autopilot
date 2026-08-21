@@ -59,6 +59,40 @@ TIMEOUTS: dict[str, float] = {
 }
 DEFAULT_TIMEOUT = 10.0
 
+#: Above this many characters, type in ONE bulk insert instead of key by key.
+#:
+#: Key-by-key is the honest simulation and it is what makes Gmail's recipient autocomplete
+#: produce a chip, so short fields keep it. But every keystroke is a separate CDP round trip
+#: (keyDown, char, keyUp), and against a real browser that is ~50ms each — so a 190-character
+#: body took ~9.5s and breached its 10s wall. An email body has no per-keystroke handler
+#: worth simulating; a recipient field does. The threshold sits between the two.
+TYPE_KEYSTROKE_LIMIT = 60
+
+#: Budget per character for the timeout wall, with headroom over the ~50ms observed for a
+#: keystroke round trip. A fixed wall on an action whose duration is LINEAR in its payload
+#: is not a tuning mistake, it is the wrong model: it fails on exactly the long bodies the
+#: writer is there to produce.
+TYPE_SECONDS_PER_CHAR = 0.08
+
+#: Ceiling on a scaled wall. The budget above is sized for the KEYSTROKE fallback; the
+#: normal path is a single insert and finishes in well under a second. Without a cap a
+#: pathological 20k-character body would buy itself a half-hour hang, and the whole point of
+#: a wall is that a stuck action cannot eat the run.
+TYPE_TIMEOUT_MAX = 60.0
+
+
+def timeout_for(call: ActionCall) -> float:
+    """This call's wall, scaled by what it actually has to do."""
+    base = TIMEOUTS.get(call.name, DEFAULT_TIMEOUT)
+    if call.name != "Type":
+        return base
+    text = str(call.args.get("text") or call.args.get("recipient") or "")
+    if len(text) <= TYPE_KEYSTROKE_LIMIT:
+        return base
+    # Bulk insert is one round trip, so the extra budget is mostly for the page reacting to
+    # a large input event. Generous, because the cost of being wrong is a dead run.
+    return min(base + len(text) * TYPE_SECONDS_PER_CHAR, TYPE_TIMEOUT_MAX)
+
 #: Settle bounds. The floor keeps fast pages snappy; the ceiling stops an animation-heavy
 #: page from stalling a turn forever. An adaptive per-host bound is a fast-follow.
 SETTLE_MIN = 0.25
@@ -257,7 +291,7 @@ class PlaywrightEmailSurface:
             logger.info("dispatch rejected %s: %s", call.name, rejection.reason)
             return rejection.to_result()
 
-        timeout = TIMEOUTS.get(call.name, DEFAULT_TIMEOUT)
+        timeout = timeout_for(call)
         try:
             result = await asyncio.wait_for(self._perform(resolved), timeout=timeout)
         except TimeoutError:
@@ -352,9 +386,32 @@ class PlaywrightEmailSurface:
         if action.point is not None:
             x, y = action.point
             await self._page.mouse.click(x, y)
-        await self._page.keyboard.type(text, delay=12)
+
+        if len(text) > TYPE_KEYSTROKE_LIMIT:
+            # One CDP round trip instead of three per character. `Input.insertText` is a
+            # real CDP input event — the page sees a trusted `beforeinput`/`input`, which is
+            # what a contenteditable body actually listens for. It does NOT synthesize
+            # individual key events, which is precisely why short fields are excluded: an
+            # address box builds its recipient chip from keystrokes.
+            await self._insert_text(text)
+        else:
+            await self._page.keyboard.type(text, delay=12)
         # NEVER log `text` — a recipient resolved from a token is raw PII by this point.
         return ActionResult(success=True, reason=f"typed {len(text)} characters")
+
+    async def _insert_text(self, text: str) -> None:
+        """Bulk-insert into the focused element, falling back to keystrokes.
+
+        The fallback matters: `Input.insertText` needs a CDP session, and the surface can be
+        driven in configurations where one is not available. Degrading to slow-but-correct
+        beats failing.
+        """
+        try:
+            session = self._cdp or await self._page.context.new_cdp_session(self._page)
+            await session.send("Input.insertText", {"text": text})
+        except Exception as exc:
+            logger.info("insertText unavailable (%s); falling back to keystrokes", exc)
+            await self._page.keyboard.type(text, delay=4)
 
     async def _do_clear(self, action: ResolvedAction) -> ActionResult:
         if action.point is not None:

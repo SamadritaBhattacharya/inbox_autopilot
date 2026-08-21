@@ -364,7 +364,24 @@ def build_reason_node(
                 "reason": "the model stopped choosing actions",
             }
 
-        call = result.tool_calls[0]
+        # Re-id the call to its verb before it enters history.
+        #
+        # A tool result has to be pairable with the call it answers, and every result in
+        # this loop echoes `tool_call_id=call.name`. The provider's own id ("call_abc123")
+        # matches none of them, so the two halves of the conversation disagree the moment
+        # the history is replayed to a DIFFERENT provider than produced it — which is
+        # exactly what the fallback chain does on every 429.
+        #
+        # Gemini's OpenAI-compatible shim resolves a `function_response`'s name by looking
+        # up its id among the preceding calls. No match means no name, and it rejects the
+        # whole request: "function_response.name: Name cannot be empty". OpenAI-shaped
+        # providers never complained, so the mismatch was invisible until the day Groq ran
+        # out of quota.
+        #
+        # The verb is a sound id here because the loop takes exactly one call per turn, so
+        # it is unique within the message that carries it.
+        raw = result.tool_calls[0]
+        call = raw.model_copy(update={"id": raw.name})
         await emitter.tool_call(call.name, call.args)
 
         return {

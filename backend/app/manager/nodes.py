@@ -11,6 +11,8 @@ never runs and the graph stalls with no error worth reading.
 """
 from __future__ import annotations
 
+import re
+
 import json
 import logging
 
@@ -120,6 +122,10 @@ def build_intake_node(
             # ever visible.
             task = _trust_addresses(task, vault)
 
+        if (implied := implied_body_intent(task, intent)) is not None:
+            logger.info("intake: body intent taken from the task itself")
+            intent = intent.with_slots(body_intent=implied)
+
         logger.info("intake: %s (confidence %.2f)", intent.action, intent.action_confidence)
         if emitter is not None:
             # The cockpit shows "I understood this as…" before anything happens, so a
@@ -144,6 +150,53 @@ def build_intake_node(
         }
 
     return intake
+
+
+#: Actions whose content the operator can DESCRIBE rather than dictate. Only these can have
+#: a body intent read out of the task; a triage or archive request has no body at all.
+_DESCRIBABLE_ACTIONS = frozenset({Action.SEND_EMAIL, Action.REPLY, Action.FORWARD})
+
+#: Words that carry no subject matter — the scaffolding of a request rather than its
+#: content. Used only to decide whether a task said anything ABOUT the email.
+_INSTRUCTION_WORDS = frozenset(
+    """a an the to and or for me my please send email mail message write compose draft
+    with about on of it that this then also can you could would should""".split()
+)
+
+_WORD_RE = re.compile(r"[a-zA-Z']+")
+_TOKEN_RE = re.compile(r"^[PCT]\d+$", re.IGNORECASE)
+
+
+def implied_body_intent(task: str, intent: TaskIntent) -> str | None:
+    """The body intent the operator already gave, when the classifier failed to notice.
+
+    "Write a good afternoon mail with short motivation and send it to P1" states perfectly
+    clearly what the email should say. Asking "what should the email be about?" in reply is
+    the single most irritating thing this agent can do, and it happens whenever one sampling
+    of the classifier fills `recipient_identity` and forgets `body_intent`.
+
+    This is NOT the "never invent a slot" rule being bent. Nothing is invented: the value is
+    the operator's own sentence, handed to the writer, whose draft the human then sees and
+    approves before anything sends. The rule exists to stop a *recipient* or a *body* being
+    conjured from nowhere, and neither happens here.
+
+    Returns `None` when the task genuinely says nothing about content — "send an email to
+    P1" deserves the question, and getting that case wrong would mean writing an email out
+    of thin air.
+    """
+    if intent.action not in _DESCRIBABLE_ACTIONS:
+        return None
+    if any(intent.slots.get(name, "").strip() for name in ("topic", "body_intent")):
+        return None
+
+    content = [
+        word
+        for word in _WORD_RE.findall(task)
+        if word.lower() not in _INSTRUCTION_WORDS and not _TOKEN_RE.match(word)
+    ]
+    # Two content words is the line between "a good afternoon note, keep it short" and
+    # "send an email to P1". Below it there is nothing to write from.
+    return task if len(content) >= 2 else None
 
 
 def _trust_addresses(text: str, vault: SessionPiiVault) -> str:

@@ -38,6 +38,24 @@ class Settings(BaseSettings):
     llm_model_executor: str = "openai/gpt-oss-120b"
     llm_model_validator: str = "openai/gpt-oss-20b"
 
+    # Per-provider overrides. Model ids are NOT portable: `openai/gpt-oss-120b` is a Groq
+    # and OpenRouter slug, and sending it to Gemini earns a 404 for a model that was never
+    # going to exist there. The generic slugs above only work across Groq and OpenRouter
+    # because those two happen to host the same roster.
+    #
+    # Empty means "use the generic one", so a single-provider setup needs none of these.
+    # Still no slug in code: the defaults are empty and the values live in `.env`, because
+    # free rosters rotate and a baked-in id fails on someone else's schedule.
+    gemini_model_classifier: str = ""
+    gemini_model_executor: str = ""
+    gemini_model_validator: str = ""
+    groq_model_classifier: str = ""
+    groq_model_executor: str = ""
+    groq_model_validator: str = ""
+    openrouter_model_classifier: str = ""
+    openrouter_model_executor: str = ""
+    openrouter_model_validator: str = ""
+
     # ── Agent loop ──────────────────────────────────────────────────────────
     max_steps: int = Field(default=40, gt=0)
     llm_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
