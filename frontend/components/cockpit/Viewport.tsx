@@ -16,9 +16,11 @@ type Props = {
   subscribeFrame: (handler: (jpegBase64: string) => void) => () => void;
   status: RunStatus;
   action?: string;
+  /** Where the browser actually is. Cockpit-only — the model never sees a URL. */
+  url?: string;
 };
 
-export function Viewport({ subscribeFrame, status, action }: Props) {
+export function Viewport({ subscribeFrame, status, action, url }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hasFrame, setHasFrame] = useState(false);
 
@@ -51,8 +53,15 @@ export function Viewport({ subscribeFrame, status, action }: Props) {
           <i className="h-2 w-2 rounded-full bg-line2" />
           <i className="h-2 w-2 rounded-full bg-line2" />
         </span>
-        <span className="ml-1 truncate font-mono text-[11px] text-faint">
-          {action ? `${action}` : "live browser"}
+        {/* The address bar. Middle-truncated, not tail-truncated: Gmail URLs are long and
+            the distinguishing part — the view, the thread id — lives at the END, so cutting
+            the tail shows every page as the same string. */}
+        <span
+          className="ml-1 min-w-0 flex-1 truncate font-mono text-[11px] text-faint"
+          title={url || undefined}
+          dir={url ? "rtl" : undefined}
+        >
+          <span dir="ltr">{url || (action ? action : "live browser")}</span>
         </span>
         {status === "running" && (
           <span className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted">

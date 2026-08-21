@@ -34,6 +34,11 @@ FEEDBACK_ACK = "feedback_ack"
 RULE_CANDIDATE = "rule_candidate"
 #: A calendar event read out of a thread, drafted for a human to check.
 EVENT_PROPOSED = "event_proposed"
+#: The message the writer composed, emitted before any browser action.
+DRAFT = "draft"
+#: Where the browser actually is. COCKPIT-ONLY: the URL is a raw identifier and never
+#: enters an `Observation`, so this rides its own channel to the authenticated view.
+LOCATION = "location"
 TOOL_CALL = "tool_call"
 ACTION_RESULT = "action_result"
 OBSERVATION = "observation"

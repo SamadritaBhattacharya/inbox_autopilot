@@ -22,16 +22,23 @@ a real bug rather than a hypothetical one:
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from typing import Literal
 
-from inbox_contracts import ActionCall, ActionResult
+from inbox_contracts import ActionCall, ActionResult, Observation
 
 from app.security.patterns import EMAIL_RE, TOKEN_RE
+from app.workers.irreversible import (
+    GATED_VERBS as _GATED_VERBS,
+)
+from app.workers.irreversible import is_irreversible, target_name
 from app.security.vault import SessionPiiVault, UnknownToken
 
-#: Verbs that cannot be undone. Each needs a matching approval decision to dispatch.
-GATED_VERBS = frozenset({"Send", "DeleteForever", "SendInvite"})
+#: Verbs that cannot be undone. Re-exported from `irreversible`, which is now the single
+#: definition — a second copy here is exactly how the click path came to be ungated.
+GATED_VERBS = _GATED_VERBS
 
 #: Arguments carrying an element index.
 INDEX_ARGS = frozenset({"index", "target_index"})
@@ -75,9 +82,15 @@ class ActionValidator:
         geometry: dict[int, tuple[float, float]],
         bound_verbs: frozenset[str] | set[str],
         approved: frozenset[str] | set[str] = frozenset(),
+        observation: Observation | None = None,
     ) -> None:
         self._vault = vault
         self._geometry = geometry
+        # This turn's observation, purely so the approval check can ask what an index
+        # POINTS AT. Without it a click on "Send" is just a click, and the gate — the
+        # strongest guarantee in the system — is one ordinary tool call away from being
+        # bypassed. Optional so existing callers still get verb-level gating.
+        self._observation = observation
         self._bound = frozenset(bound_verbs)
         # Approval fingerprints, not verb names: approving one draft must not authorize a
         # different one. See `approval_fingerprint`.
@@ -86,6 +99,7 @@ class ActionValidator:
     def validate(self, call: ActionCall) -> ResolvedAction:
         self._check_verb(call)
         self._check_approval(call)
+        self._check_compose_not_already_open(call)
         point = self._resolve_index(call)
         resolved = self._resolve_tokens(call)
         return ResolvedAction(call=call, point=point, resolved_args=resolved)
@@ -101,13 +115,48 @@ class ActionValidator:
             )
 
     def _check_approval(self, call: ActionCall) -> None:
-        if call.name not in GATED_VERBS:
+        # By CONSEQUENCE, not by name. `Click` on Gmail's Send button is as irreversible as
+        # the `Send` verb, and the model reaches for it naturally.
+        if not is_irreversible(call, self._observation):
             return
         if approval_fingerprint(call) not in self._approved:
+            target = target_name(self._observation, call.args.get("index"))
+            what = f"{call.name} on {target!r}" if target else call.name
             raise DispatchRejected(
                 "APPROVAL_REQUIRED",
-                f"{call.name} is irreversible and has no matching approval for this payload",
+                f"{what} is irreversible and has no matching approval for this payload",
             )
+
+    #: Gmail's Compose control. Anchored so "Compose" matches and "Recompose", "Compose
+    #: settings" do not.
+    _COMPOSE = re.compile(r"^\s*compose\b", re.IGNORECASE)
+
+    def _check_compose_not_already_open(self, call: ActionCall) -> None:
+        """Refuse a second compose window, rather than trust the model not to open one.
+
+        Observed in the wild: the agent clicked Compose, re-observed, still saw a Compose
+        button — because Gmail's is always there — and clicked it again. It then typed the
+        recipient into one window and the subject into the other, and sent a mail with no
+        subject. Every part of that is reasonable behaviour on an ambiguous screen.
+
+        The repetition guard cannot catch it: the two clicks carry different indices, so
+        their signatures differ. And a prompt line only asks nicely. Refusing here makes the
+        action idempotent in effect, and the typed reason tells the model what to do instead
+        — which is what turns a rejection into progress rather than a stuck loop.
+        """
+        if call.name != "Click":
+            return
+        mail = getattr(self._observation, "mail", None)
+        if mail is None or not mail.compose_open:
+            return
+        if not self._COMPOSE.match(target_name(self._observation, call.args.get("index"))):
+            return
+        raise DispatchRejected(
+            "COMPOSE_ALREADY_OPEN",
+            "a compose window is already open — write in that one instead of opening "
+            "another. Opening a second window is how a subject ends up in one draft and "
+            "the recipient in another.",
+        )
 
     def _resolve_index(self, call: ActionCall) -> tuple[float, float] | None:
         for arg in INDEX_ARGS:

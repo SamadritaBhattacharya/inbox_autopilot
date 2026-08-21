@@ -17,6 +17,7 @@ from inbox_contracts import ActionCall, ActionResult, Observation
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.llm.base import Message
+from app.manager.draft import Draft
 from app.manager.intent import Plan, Route, TaskIntent
 from app.telemetry.records import ErrorCode, StepRecord
 
@@ -39,6 +40,11 @@ class AgentState(BaseModel):
     pending_question: str | None = None
     route: Route | None = None
     plan: Plan | None = None
+    #: The words, drafted before the browser opens. Typed, NOT `object`: state is
+    #: revalidated from the checkpoint on every resume, and an untyped field comes back a
+    #: plain dict — which the worker then reads `.subject` off, on the approval path, which
+    #: is the one path that always round-trips.
+    draft: Draft | None = None
 
     # ── IN ──────────────────────────────────────────────────────────────────
     active_worker: str | None = None
@@ -66,6 +72,9 @@ class AgentState(BaseModel):
     reason: str = ""
 
     # ── guards ──────────────────────────────────────────────────────────────
+    #: How many times we have handed the browser back for a sign-in. Bounded, so a run
+    #: cannot pause forever on a login page the human has decided not to fix.
+    signin_asks: int = 0
     stuck_count: int = 0
     nudge_count: int = 0
     #: Rolling window of recent action signatures, for the repetition guard. Catches loops

@@ -22,10 +22,11 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Literal
 
-from inbox_contracts import ActionCall
+from inbox_contracts import ActionCall, Observation
 from pydantic import BaseModel, ConfigDict
 
-from app.surface.dispatch import GATED_VERBS, approval_fingerprint
+from app.surface.dispatch import approval_fingerprint
+from app.workers.irreversible import GATED_VERBS, is_irreversible
 
 
 class Verdict(StrEnum):
@@ -83,8 +84,14 @@ class Decision(BaseModel):
         return self.verdict is Verdict.APPROVE
 
 
-def is_gated(call: ActionCall | None) -> bool:
-    return call is not None and call.name in GATED_VERBS
+def is_gated(call: ActionCall | None, observation: Observation | None = None) -> bool:
+    """Does this action need a human decision before it dispatches?
+
+    Delegates to `is_irreversible`, which asks what the action DOES rather than what it is
+    named — a `Click` on Gmail's Send button sends the mail just as surely as the `Send`
+    verb, and gating only the verb left that path wide open.
+    """
+    return is_irreversible(call, observation)
 
 
 def build_request(

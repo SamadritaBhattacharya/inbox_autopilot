@@ -46,22 +46,47 @@ def test_real_mailbox_views_are_unaffected(url, expected):
     assert detect_view(url, compose_open=False) == expected
 
 
-async def test_the_loop_stops_immediately_when_signed_out():
-    """Terminate typed, rather than hand the model a page it cannot act in."""
+async def test_a_login_wall_hands_the_browser_back_instead_of_guessing():
+    """Pause for the human — never attempt the sign-in.
+
+    Two reasons, and either alone is decisive. It does not work: Google refuses its sign-in
+    flow in a browser running a debugging port, so a typed password ends at "Couldn't sign
+    you in" however well the loop reasons. And it must not: a password relayed through the
+    model would land in the trajectory, the logs, and the screencast frames.
+
+    `interrupt()` needs the LangGraph runtime, so what is asserted here is that the node
+    raises rather than returning a terminal delta — the pause itself, not a failure.
+    """
     surface = FakeEmailSurface(
         [observation(Element(index=1, role="button", name="Try again"), view="signed_out")]
     )
-    sink = BufferSink()
-    observe = build_observe_node(surface, EventEmitter(sink))
+    observe = build_observe_node(surface, EventEmitter(BufferSink()))
 
     from app.agent.state import AgentState
 
-    delta = await observe(AgentState(task="summarize my inbox", thread_id="so-1"))
+    with pytest.raises(Exception) as exc:
+        await observe(AgentState(task="summarize my inbox", thread_id="so-1"))
+
+    assert "runnable context" in str(exc.value) or "interrupt" in str(exc.value).lower()
+
+
+async def test_it_gives_up_typed_rather_than_pausing_forever():
+    """A run that can pause indefinitely on a page nobody will fix is a hung run."""
+    surface = FakeEmailSurface(
+        [observation(Element(index=1, role="button", name="Try again"), view="signed_out")]
+    )
+    observe = build_observe_node(surface, EventEmitter(BufferSink()))
+
+    from app.agent.state import AgentState
+    from app.workers.loop import MAX_SIGNIN_ASKS
+
+    delta = await observe(
+        AgentState(task="summarize my inbox", thread_id="so-2", signin_asks=MAX_SIGNIN_ASKS)
+    )
 
     assert delta["finished"] is True
     assert delta["success"] is False
     assert delta["error_code"] is ErrorCode.NOT_SIGNED_IN
-    assert "not signed into Gmail" in delta["reason"]
 
 
 async def test_a_signed_in_inbox_keeps_going():

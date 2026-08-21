@@ -95,9 +95,33 @@ EXTRACT_JS = """
     return '';
   }
 
+  // A secret must never leave the page, and this is the earliest point at which that can
+  // be guaranteed. Everything downstream — the funnel, the vault, the wire, the model, the
+  // trajectory — only ever sees what this function returns, so redacting HERE is the one
+  // place the guarantee is total. The PII vault cannot help: it tokenizes so values can be
+  // resolved again later, which is the opposite of what a password needs.
+  const SECRET_TYPES = new Set(['password']);
+  const SECRET_WORDS = /pass(word|wd)?|pwd|otp|one-?time|2fa|mfa|totp|cvv|cvc|secret|token|credit-?card|cc-?num/i;
+  const SECRET_AUTOCOMPLETE = /password|one-time-code|cc-number|cc-csc/i;
+
+  function isSecret(el) {
+    const type = (el.getAttribute && el.getAttribute('type') || '').toLowerCase();
+    if (SECRET_TYPES.has(type)) return true;
+    const autocomplete = el.getAttribute && el.getAttribute('autocomplete') || '';
+    if (SECRET_AUTOCOMPLETE.test(autocomplete)) return true;
+    // Sites that style their own masked field rather than using type=password still name it
+    // something honest, so the attribute soup is worth checking.
+    const hints = [el.name, el.id, el.getAttribute && el.getAttribute('aria-label')]
+      .filter(Boolean).join(' ');
+    return SECRET_WORDS.test(hints);
+  }
+
   function valueOf(el) {
-    if ('value' in el && typeof el.value === 'string' && el.value) return el.value;
-    return null;
+    if (!('value' in el) || typeof el.value !== 'string' || !el.value) return null;
+    // Report that it is FILLED, never what with. The agent needs to know whether a field
+    // still needs attention; it never needs the characters.
+    if (isSecret(el)) return '•'.repeat(8);
+    return el.value;
   }
 
   function isInteractive(el, role) {

@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Sign in</title>
+<h1>Sign in</h1>
+<form>
+  <label for="email">Email</label>
+  <input id="email" name="identifier" type="email" value="someone@example.com">
+
+  <label for="pw">Password</label>
+  <input id="pw" name="Passwd" type="password" value="hunter2-correct-horse">
+
+  <label for="otp">Code</label>
+  <input id="otp" autocomplete="one-time-code" type="text" value="483920">
+
+  <!-- A site that masks its own field instead of using type=password. -->
+  <label for="custom">Secret</label>
+  <input id="custom" name="account_password" type="text" value="masked-by-css-only">
+
+  <button type="submit">Next</button>
+</form>

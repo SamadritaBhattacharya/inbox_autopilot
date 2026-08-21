@@ -40,6 +40,8 @@ from app.agent.guards import (
     repetition_nudge,
     stuck_nudge,
 )
+from langgraph.types import interrupt
+
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
 from app.feedback.models import Feedback, FeedbackKind
@@ -62,6 +64,11 @@ DEFAULT_CONTEXT_BUDGET = 8_000
 WORKER_SYSTEM = load_prompt("worker")
 
 
+#: Two goes at signing in. One is unforgiving if they mistype; unbounded means a run that
+#: never ends on a page nobody is going to fix.
+MAX_SIGNIN_ASKS = 2
+
+
 def build_observe_node(surface: EmailSurface, emitter: EventEmitter):
     """Fresh perception. Rebuilt every turn, never diffed in place."""
 
@@ -79,28 +86,56 @@ def build_observe_node(surface: EmailSurface, emitter: EventEmitter):
                 "reason": f"the mailbox became unreachable: {exc}",
             }
 
-        # Not signed in? Stop now, and say so.
+        # Where the browser is, for the human. Best-effort and cockpit-only: a surface with
+        # no URL (an API-backed one) simply has nothing to report, and a failure to report
+        # it must never cost the run a turn.
+        if url := getattr(surface, "current_url", ""):
+            await emitter.location(url, observation.title or "")
+
+        # A login wall: hand the browser back to the human rather than fail.
         #
-        # No amount of reasoning fixes a login wall, and letting the loop try is actively
-        # harmful: the agent spent six steps on Google's "Couldn't sign you in" page,
-        # scrolling and re-reading, and finished by confidently summarizing an inbox it had
-        # never seen. A wrong answer delivered fluently is worse than a refusal, so this
-        # terminates typed rather than handing the model something it cannot act on.
+        # The agent must NOT attempt this itself, and that is not caution — it does not work.
+        # Google refuses its sign-in flow in a browser running a debugging port, so a typed
+        # password ends at "Couldn't sign you in" no matter how well the loop reasons. It is
+        # also the one secret that must never enter this system: a password relayed through
+        # the model's context would land in the trajectory, the logs, and the screencast
+        # frames.
+        #
+        # So the human signs in on Google's real page, in the live browser they are already
+        # watching, and we wait. `interrupt()` checkpoints and stops; resuming re-enters this
+        # node from the top, which re-observes — so the answer is not trusted, it is verified.
         if observation.mail and observation.mail.view == "signed_out":
-            reason = (
-                "That browser is not signed into Gmail. Open the mailbox in the Chrome the "
-                "agent is attached to, sign in, and start the run again "
-                "(`python scripts/chrome.py list` shows which profiles are signed in)."
+            if state.signin_asks >= MAX_SIGNIN_ASKS:
+                # Asked and still signed out. Terminating typed beats pausing forever on a
+                # page the human has already declined to fix.
+                reason = (
+                    "That browser is still not signed into Gmail. Sign in there, then start "
+                    "the run again."
+                )
+                await emitter.error(reason, ErrorCode.NOT_SIGNED_IN.value)
+                return {
+                    "observation": observation,
+                    "status": "failed",
+                    "error_code": ErrorCode.NOT_SIGNED_IN,
+                    "finished": True,
+                    "success": False,
+                    "reason": reason,
+                }
+
+            interrupt(
+                {
+                    "signin": True,
+                    "question": (
+                        "That browser isn't signed into Gmail. Sign in on the right — it is "
+                        "a real Chrome window and this is Google's own page — then continue. "
+                        "Type your password there, never here."
+                    ),
+                    "missing": ["gmail_session"],
+                    "task": state.task,
+                }
             )
-            await emitter.error(reason, ErrorCode.NOT_SIGNED_IN.value)
-            return {
-                "observation": observation,
-                "status": "failed",
-                "error_code": ErrorCode.NOT_SIGNED_IN,
-                "finished": True,
-                "success": False,
-                "reason": reason,
-            }
+            # Reached only on resume: count the ask, then fall through to re-observe.
+            return {"signin_asks": state.signin_asks + 1, "status": "running"}
 
         before = page_signature(state.observation)
         after = page_signature(observation)

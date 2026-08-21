@@ -44,7 +44,7 @@ def build_approval_gate_node(
 
     async def approval_gate(state: AgentState) -> dict:
         call = state.last_action
-        if not is_gated(call):
+        if not is_gated(call, state.observation):
             return {}
 
         # Derived from the payload, not random: this node re-executes when the run is

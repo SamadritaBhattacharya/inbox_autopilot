@@ -75,6 +75,26 @@ class EventEmitter:
     async def plan(self, steps: list[str]) -> None:
         await self._emit(protocol.PLAN_UPDATE, {"steps": steps})
 
+    async def draft(self, subject: str, body: str, tone: str) -> None:
+        """The composed message, before the browser is touched.
+
+        Shown early on purpose: a wrong tone is cheap to fix here and expensive to fix at
+        the approval card, where a compose window is already filled in.
+        """
+        await self._emit(protocol.DRAFT, {"subject": subject, "body": body, "tone": tone})
+
+    async def location(self, url: str, title: str = "") -> None:
+        """Where the browser is, for the human watching.
+
+        **Deliberately not part of `Observation`.** A URL is a raw identifier — it carries
+        thread ids and account hints — which is why the contract has `context_id` instead
+        and the funnel tokenizes it. The model must never see this. The cockpit is
+        authenticated and already shows resolved recipients on approval cards, so showing
+        the human where their own browser is breaks nothing; routing it through the
+        observation would.
+        """
+        await self._emit(protocol.LOCATION, {"url": url, "title": title})
+
     async def finalize(self, success: bool, reason: str, error_code: str | None = None) -> None:
         await self._emit(
             protocol.FINALIZE, {"success": success, "reason": reason, "errorCode": error_code}

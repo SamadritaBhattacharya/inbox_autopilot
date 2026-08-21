@@ -37,6 +37,7 @@ export function CockpitClient({ threadId, task }: { threadId: string; task?: str
     status,
     connected,
     absent,
+    location,
     answer,
     decide,
     choose,
@@ -105,6 +106,7 @@ export function CockpitClient({ threadId, task }: { threadId: string; task?: str
           subscribeFrame={subscribeFrame}
           status={status}
           action={activity?.label || currentAction}
+          url={location}
         />
       </section>
 

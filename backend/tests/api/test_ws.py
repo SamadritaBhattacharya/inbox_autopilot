@@ -19,7 +19,7 @@ from app.config.settings import Settings
 from app.events.protocol import AgentEvent
 from app.events.sink import BufferSink
 from app.rules.store import NoRules
-from tests.fakes.fake_llm import FakeLLMClient, ok
+from tests.fakes.fake_llm import FakeLLMClient, drafted, ok
 
 
 def intake(action: str, confidence: float = 0.95, **slots):
@@ -113,6 +113,7 @@ def test_answering_resumes_the_run(wired):
             [
                 intake("send_email", recipient_identity="P1"),
                 ok("linear"),
+                drafted(),
             ]
         )
     )

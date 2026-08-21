@@ -16,6 +16,9 @@ ASK = "ask"
 ROUTER = "router"
 LINEAR = "linear"
 PLANNER = "planner"
+#: Drafts the message before the browser opens. Sits on BOTH paths into `dispatch` — linear
+#: and decision alike — so no route can reach a compose window without having written first.
+WRITER = "writer"
 DISPATCH = "dispatch"
 APPROVAL = "approval_gate"
 OBSERVE = "observe"
@@ -92,7 +95,9 @@ def route_after_reason(state: AgentState) -> str:
         return VERIFY
     if state.last_action is None:
         return REASON
-    return APPROVAL if is_gated(state.last_action) else ACT
+    # With the observation: a click on Send must route to the gate exactly as the
+    # `Send` verb does, or the dispatcher refuses it and the run dies instead of asking.
+    return APPROVAL if is_gated(state.last_action, state.observation) else ACT
 
 
 def route_after_approval(state: AgentState) -> str:

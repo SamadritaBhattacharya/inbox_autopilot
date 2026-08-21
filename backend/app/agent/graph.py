@@ -42,6 +42,7 @@ from app.agent.routing import (
     OBSERVE,
     OPTIONS,
     PLANNER,
+    WRITER,
     REASON,
     ROUTER,
     VERIFY,
@@ -62,6 +63,7 @@ from app.events.sink import NullSink
 from app.feedback.store import FeedbackStore
 from app.llm.base import LLMClient
 from app.manager.intent import Action
+from app.manager.writer import build_writer_node
 from app.manager.nodes import (
     build_context_gate_node,
     build_intake_node,
@@ -240,6 +242,7 @@ def build_manager_graph(
     graph.add_node(ASK, build_ask_node())
     graph.add_node(ROUTER, build_router_node(llm, rules, emitter))
     graph.add_node(PLANNER, build_planner_node(llm, emitter))
+    graph.add_node(WRITER, build_writer_node(llm, emitter))
     graph.add_node(DISPATCH, build_dispatch_node(emitter))
     graph.add_node(FINALIZE, build_finalize_node())
 
@@ -284,9 +287,13 @@ def build_manager_graph(
     graph.add_conditional_edges(
         ROUTER,
         route_after_router,
-        {DISPATCH: DISPATCH, PLANNER: PLANNER, FINALIZE: FINALIZE},
+        # `route_after_router` still names DISPATCH; the writer is spliced in front of it
+        # here rather than in the routing function, which stays a pure decision about
+        # topology and knows nothing about drafting.
+        {DISPATCH: WRITER, PLANNER: PLANNER, FINALIZE: FINALIZE},
     )
-    graph.add_edge(PLANNER, DISPATCH)
+    graph.add_edge(PLANNER, WRITER)
+    graph.add_edge(WRITER, DISPATCH)
 
     if surface is None:
         graph.add_edge(DISPATCH, FINALIZE)

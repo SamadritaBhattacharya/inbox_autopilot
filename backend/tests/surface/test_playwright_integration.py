@@ -282,3 +282,61 @@ async def test_a_failing_frame_consumer_does_not_kill_the_run(surface):
     observation = await surface.observe()
     assert observation.elements
     await surface.stop_screencast()
+
+
+# ── secrets never leave the page ────────────────────────────────────────────
+
+LOGIN = (Path(__file__).resolve().parents[1] / "fixtures" / "login.html").as_uri()
+
+SECRETS = ("hunter2-correct-horse", "483920", "masked-by-css-only")
+
+
+async def test_no_credential_value_survives_the_funnel():
+    """The strongest guarantee in the system, and the cheapest to lose.
+
+    `valueOf` used to return `el.value` for anything that had one — which on a login page
+    is the plaintext password, headed for the model's context, the trajectory store, and
+    the logs. The PII vault cannot help here: it tokenizes so values can be *resolved
+    again*, which is the opposite of what a secret needs. So the redaction happens in the
+    page, in the extractor, before a single byte crosses into Python.
+
+    Asserted against the WHOLE serialized observation rather than field by field: a secret
+    that reappears in an accessible name or a title is just as leaked as one in a value.
+    """
+    surface, close = await launch_surface(headless=True, start_url=LOGIN)
+    try:
+        observation = await surface.observe()
+    finally:
+        await close()
+
+    serialized = observation.model_dump_json()
+    for secret in SECRETS:
+        assert secret not in serialized, f"{secret!r} reached the observation"
+
+
+async def test_a_filled_secret_still_reports_that_it_is_filled():
+    """Redaction must not blind the agent: "is this box already filled?" is a question it
+    legitimately needs answered, and only the characters are off-limits."""
+    surface, close = await launch_surface(headless=True, start_url=LOGIN)
+    try:
+        observation = await surface.observe()
+    finally:
+        await close()
+
+    values = [element.value for element in observation.elements if element.value]
+    assert any("•" in (value or "") for value in values), "no field reported as filled"
+
+
+async def test_an_ordinary_field_is_still_readable():
+    """The guard must be narrow. Redacting every value would make the funnel useless for
+    the compose window, which is the one place values matter most."""
+    surface, close = await launch_surface(headless=True, start_url=LOGIN)
+    try:
+        observation = await surface.observe()
+    finally:
+        await close()
+
+    # The email field is ordinary input — tokenized as PII, but present and not masked.
+    assert any(
+        element.value and "•" not in element.value for element in observation.elements
+    ), "every value was redacted; the guard is too broad"

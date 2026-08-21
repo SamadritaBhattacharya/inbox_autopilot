@@ -31,6 +31,17 @@ def task_block(state: AgentState) -> str:
             lines.append("")
             lines.append("Already established (use these — they are resolved and valid):")
             lines.extend(f"- {name}: {value}" for name, value in filled.items())
+
+    draft = state.draft
+    if draft is not None:
+        # Verbatim, and said so. These words were written by a node with a short context and
+        # a prompt about writing; re-deciding them here — mid-loop, surrounded by 140 DOM
+        # elements — reliably makes them worse, and the human may already have approved them.
+        lines.append("")
+        lines.append("The message is already written. Type it EXACTLY as it appears:")
+        lines.append(f"Subject: {draft.subject}")
+        lines.append("Body:")
+        lines.append(draft.body)
     return "\n".join(lines)
 
 
@@ -45,9 +56,14 @@ def observation_block(state: AgentState) -> str:
         detail = f"view: {observation.mail.view}"
         if observation.mail.unread_count is not None:
             detail += f" · unread: {observation.mail.unread_count}"
-        if observation.mail.compose_open:
-            detail += " · compose is open"
         lines.append(detail)
+        if observation.mail.compose_open:
+            # Its own line, not a clause tacked onto a detail string. Buried in
+            # "view: inbox · unread: 12 · compose is open" it was reliably missed, and the
+            # agent opened a second window and split one email across both.
+            lines.append(
+                "A COMPOSE WINDOW IS ALREADY OPEN. Write in it. Do not click Compose again."
+            )
     if observation.changed:
         lines.append(f"changed: {observation.changed}")
 

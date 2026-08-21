@@ -60,6 +60,18 @@ class FakeLLMClient:
         return nxt
 
 
+def drafted(subject: str = "Friday demo", body: str = "It moved to 4pm.") -> LLMResult:
+    """The writer node's reply.
+
+    A named helper rather than an inline blob because the writer sits on every path into
+    `dispatch` for a writing action: any test that composes needs one of these, and a script
+    that is one entry short fails as "unscripted call #N", which says nothing about why.
+    """
+    import json as _json
+
+    return ok(_json.dumps({"subject": subject, "body": body, "tone": "professional"}))
+
+
 def ok(text: str = "thinking", *, provider: str = "fake", tokens: int = 10) -> LLMResult:
     """A successful completion, for readable test scripts."""
     return LLMResult(

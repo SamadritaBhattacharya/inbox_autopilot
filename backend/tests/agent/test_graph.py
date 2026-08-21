@@ -15,7 +15,7 @@ from app.agent.graph import build_manager_graph
 from app.manager.intent import Action
 from app.rules.store import InMemoryRulesStore, NoRules, Rule
 from app.telemetry.records import ErrorCode
-from tests.fakes.fake_llm import FakeLLMClient, ok
+from tests.fakes.fake_llm import FakeLLMClient, drafted, ok
 
 
 def intake_reply(action: str, confidence: float = 0.95, **slots):
@@ -39,6 +39,7 @@ async def test_a_complete_task_clears_the_gate_and_routes():
             intake_reply("send_email", recipient_identity="P1", topic="the Friday demo"),
             ok("decision"),
             ok("Click Compose\nFill recipient\nWrite body"),
+            drafted(),
         ]
     )
     graph = build_manager_graph(llm=llm, rules=NoRules())
@@ -83,6 +84,7 @@ async def test_answering_the_question_resumes_the_run():
             intake_reply("send_email", recipient_identity="P1"),
             ok("decision"),
             ok("Click Compose\nWrite body"),
+            drafted(),
         ]
     )
     graph = build_manager_graph(llm=llm, rules=NoRules())
@@ -111,7 +113,7 @@ async def test_the_pause_survives_a_rebuilt_graph():
 
     # A completely fresh graph object, sharing only the checkpoint.
     rebuilt = build_manager_graph(
-        llm=FakeLLMClient([ok("decision"), ok("Click Compose")]),
+        llm=FakeLLMClient([ok("decision"), ok("Click Compose"), drafted()]),
         rules=NoRules(),
         checkpointer=saver,
     )
@@ -218,6 +220,7 @@ async def test_every_llm_node_writes_a_trajectory_row():
             intake_reply("send_email", recipient_identity="P1", topic="demo"),
             ok("decision"),
             ok("Click Compose"),
+            drafted(),
         ]
     )
     graph = build_manager_graph(llm=llm, rules=NoRules())
@@ -225,13 +228,19 @@ async def test_every_llm_node_writes_a_trajectory_row():
     final = await drive(graph, "email P1 about demo")
 
     nodes = [record.node for record in final["history"]]
-    assert nodes == ["intake", "router", "planner", "finalize"]
+    # `writer` is an LLM node like any other: if it does not appear here it is drafting
+    # without leaving an audit row, and the trajectory stops being the record of the run.
+    assert nodes == ["intake", "router", "planner", "writer", "finalize"]
 
 
 async def test_the_run_always_ends_typed():
     """Every terminal state carries a code or an explicit success."""
     llm = FakeLLMClient(
-        [intake_reply("send_email", recipient_identity="P1", topic="demo"), ok("linear")]
+        [
+            intake_reply("send_email", recipient_identity="P1", topic="demo"),
+            ok("linear"),
+            drafted(),
+        ]
     )
     graph = build_manager_graph(llm=llm, rules=NoRules())
 

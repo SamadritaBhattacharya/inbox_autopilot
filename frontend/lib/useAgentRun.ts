@@ -38,6 +38,7 @@ export function useAgentRun(threadId: string, task?: string) {
   const [status, setStatus] = useState<RunStatus>("idle");
   const [connected, setConnected] = useState(false);
   const [absent, setAbsent] = useState(false);
+  const [location, setLocation] = useState("");
   // Transient by design: the LATEST activity replaces the last one, and it is cleared
   // when the run ends. Keeping a history of them would just be a noisier transcript.
   const [activity, setActivity] = useState<Activity | null>(null);
@@ -86,6 +87,13 @@ export function useAgentRun(threadId: string, task?: string) {
 
       if (frame.event === "activity") {
         setActivity({ phase: str(frame.data.phase), label: str(frame.data.label) });
+        return;
+      }
+
+      // Where the browser is. Handled before the transcript append and never stored as an
+      // event: it changes on every turn and belongs in the viewport chrome, not the log.
+      if (frame.event === "location") {
+        setLocation(str(frame.data.url));
         return;
       }
 
@@ -159,6 +167,7 @@ export function useAgentRun(threadId: string, task?: string) {
     status,
     connected,
     absent,
+    location,
     answer,
     decide,
     choose,

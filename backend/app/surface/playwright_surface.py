@@ -110,6 +110,7 @@ class PlaywrightEmailSurface:
 
         #: Rebuilt on every `observe()`. Never carried across turns.
         self._geometry: dict[int, tuple[float, float]] = {}
+        self._last_observation: Observation | None = None
         self._previous_identities: set[str] = set()
         self._bound_verbs = frozenset(bound_verbs or TIMEOUTS.keys())
         self._approved: set[str] = set()
@@ -186,6 +187,23 @@ class PlaywrightEmailSurface:
             # a hung agent and is exactly how this went unnoticed once already.
             logger.warning("screencast frame %d not delivered", seq, exc_info=True)
 
+    @property
+    def current_url(self) -> str:
+        """Where this page is, raw.
+
+        A CAPABILITY, not part of `EmailSurface` — the same treatment `start_screencast`
+        gets. Neither belongs on the port: a URL is meaningless to an API-backed surface and
+        a screencast is impossible for one, and widening the port to fit one implementation
+        is how ports stop being swappable. Consumers ask with `getattr`.
+
+        Never goes into an `Observation`. It reaches the authenticated cockpit and nothing
+        else; see `EventEmitter.location`.
+        """
+        try:
+            return self._page.url
+        except Exception:
+            return ""
+
     async def stop_screencast(self) -> None:
         if self._cdp is None:
             return
@@ -221,6 +239,10 @@ class PlaywrightEmailSurface:
         # Indices belong to THIS observation only. Replacing the map wholesale is what makes
         # a stale index from last turn a rejection rather than a misfire.
         self._geometry = geometry
+        # Kept for exactly one reader: the approval check, which must be able to ask what an
+        # index POINTS AT. Rebuilt every turn alongside the geometry it belongs to — a stale
+        # observation here would gate the wrong element, which is worse than not gating.
+        self._last_observation = observation
         self._previous_identities = identity_set(observation.elements)
 
         logger.debug("observed %d/%d elements", report.shown, report.extracted)
@@ -258,6 +280,9 @@ class PlaywrightEmailSurface:
             geometry=self._geometry,
             bound_verbs=self._bound_verbs,
             approved=self._approved,
+            # So the approval check can ask what an index points at. Same turn as the
+            # geometry it is validated against — a stale one would gate the wrong element.
+            observation=self._last_observation,
         )
 
     async def preview(self, call: ActionCall) -> str:

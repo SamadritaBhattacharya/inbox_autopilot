@@ -34,7 +34,7 @@ from app.workers.approval import (
     decision_from,
     is_gated,
 )
-from tests.fakes.fake_llm import FakeLLMClient, ok
+from tests.fakes.fake_llm import FakeLLMClient, drafted, ok
 from tests.fakes.fake_surface import FakeEmailSurface, observation
 
 DRAFT = "To:      Priya Nair <priya.nair@corp.com>\nSubject: Friday demo\n\nIt moved to 4pm."
@@ -176,6 +176,7 @@ def compose_llm(*, extra: list | None = None) -> FakeLLMClient:
             intake("send_email", recipient_identity="P1", topic="the Friday demo"),
             ok("decision"),
             ok("Open compose\nFill fields\nSend"),
+            drafted(),
             acts("Send", "The draft is complete; sending.", index=9),
             *(extra or []),
         ]
