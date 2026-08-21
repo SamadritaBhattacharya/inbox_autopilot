@@ -66,6 +66,7 @@ def build_observe_node(surface: EmailSurface, emitter: EventEmitter):
     """Fresh perception. Rebuilt every turn, never diffed in place."""
 
     async def observe(state: AgentState) -> dict:
+        await emitter.activity("looking", "reading the screen")
         try:
             observation = await surface.observe()
         except SurfaceUnavailable as exc:
@@ -76,6 +77,29 @@ def build_observe_node(surface: EmailSurface, emitter: EventEmitter):
                 "finished": True,
                 "success": False,
                 "reason": f"the mailbox became unreachable: {exc}",
+            }
+
+        # Not signed in? Stop now, and say so.
+        #
+        # No amount of reasoning fixes a login wall, and letting the loop try is actively
+        # harmful: the agent spent six steps on Google's "Couldn't sign you in" page,
+        # scrolling and re-reading, and finished by confidently summarizing an inbox it had
+        # never seen. A wrong answer delivered fluently is worse than a refusal, so this
+        # terminates typed rather than handing the model something it cannot act on.
+        if observation.mail and observation.mail.view == "signed_out":
+            reason = (
+                "That browser is not signed into Gmail. Open the mailbox in the Chrome the "
+                "agent is attached to, sign in, and start the run again "
+                "(`python scripts/chrome.py list` shows which profiles are signed in)."
+            )
+            await emitter.error(reason, ErrorCode.NOT_SIGNED_IN.value)
+            return {
+                "observation": observation,
+                "status": "failed",
+                "error_code": ErrorCode.NOT_SIGNED_IN,
+                "finished": True,
+                "success": False,
+                "reason": reason,
             }
 
         before = page_signature(state.observation)
@@ -225,6 +249,10 @@ def build_reason_node(
         # share a capability set.
         bound = tools(state) if callable(tools) else tools
 
+        # The model call is the long pause in every turn. Saying so beforehand is the
+        # difference between an agent that looks like it is thinking and one that looks
+        # like it has crashed.
+        await emitter.activity("thinking", "deciding what to do next")
         result = await llm.complete(role="executor", messages=messages, tools=bound)
 
         # ── think-before-act ──
@@ -368,6 +396,7 @@ def build_act_node(
         if call.name in INTERNAL_VERBS:
             return {**delta, **await handle_internal(call, state, emitter)}
 
+        await emitter.activity("acting", call.name)
         try:
             result = await surface.act(call)
         except SurfaceUnavailable as exc:

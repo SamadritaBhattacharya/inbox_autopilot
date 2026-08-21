@@ -214,6 +214,7 @@ def build_manager_graph(
     llm: LLMClient,
     surface: EmailSurface | None = None,
     emitter: EventEmitter | None = None,
+    vault=None,
     rules: RulesStore | None = None,
     registry: CuratedSkillRegistry | None = None,
     feedback: FeedbackStore | None = None,
@@ -234,7 +235,7 @@ def build_manager_graph(
     emitter = emitter or EventEmitter(NullSink())
 
     graph = StateGraph(AgentState)
-    graph.add_node("intake", build_intake_node(llm, emitter))
+    graph.add_node("intake", build_intake_node(llm, emitter, vault))
     graph.add_node("context_gate", build_context_gate_node(threshold=threshold))
     graph.add_node(ASK, build_ask_node())
     graph.add_node(ROUTER, build_router_node(llm, rules, emitter))

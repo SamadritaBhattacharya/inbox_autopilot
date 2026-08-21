@@ -38,6 +38,13 @@ TOOL_CALL = "tool_call"
 ACTION_RESULT = "action_result"
 OBSERVATION = "observation"
 FRAME = "frame"
+#: What the agent is doing RIGHT NOW — thinking, looking, acting.
+#:
+#: Distinct from `status`, which is about the run's phase. This is transient: the
+#: cockpit shows the latest one as a live indicator and never keeps it in the transcript.
+#: Without it there is a multi-second silence around every model call, and silence from
+#: an agent reads as "broken", not "thinking".
+ACTIVITY = "activity"
 
 # ── human in the loop ──
 QUESTION = "question"

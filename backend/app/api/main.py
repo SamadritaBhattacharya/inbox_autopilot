@@ -6,6 +6,8 @@ LLM calls, no browser control lives here — those go through ports, wired in
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -16,6 +18,15 @@ from inbox_contracts import PROTOCOL_VERSION
 from app.api.ws import RUNS, ws_run
 from app.config.settings import get_settings
 
+logger = logging.getLogger(__name__)
+
+# uvicorn configures its own loggers and leaves the root logger alone, so without this every
+# `logger.warning` in this codebase goes nowhere and the server looks silent while failing.
+if not logging.getLogger().handlers:  # pragma: no cover - process-level setup
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s"
+    )
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -24,8 +35,31 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     Without this a redeploy leaks a Chromium process per in-flight run, and nothing else in
     the system is positioned to notice.
     """
+    _log_browser_capability()
     yield
     await RUNS.shutdown()
+
+
+def _log_browser_capability() -> None:
+    """Say at startup whether this process can drive a browser at all.
+
+    On Windows only `ProactorEventLoop` can spawn the browser process, and uvicorn's
+    `--reload` selects the loop that cannot. That no longer breaks anything — the browser
+    falls back to a thread with its own loop — but it costs a thread, and knowing which mode
+    a process is in turns a whole class of confusing report into one line at startup.
+    """
+    from app.surface.browser_thread import loop_can_spawn_subprocesses
+
+    loop = asyncio.get_running_loop()
+    if loop_can_spawn_subprocesses(loop):
+        logger.info("event loop %s can start a browser directly", type(loop).__name__)
+    else:
+        logger.info(
+            "event loop %s cannot spawn subprocesses, so the browser will run on a "
+            "dedicated loop of its own. Runs work; `python -m app.api.dev` avoids the "
+            "extra thread.",
+            type(loop).__name__,
+        )
 
 
 app = FastAPI(

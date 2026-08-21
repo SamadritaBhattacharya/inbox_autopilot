@@ -145,9 +145,21 @@ class ActionValidator:
                         "UNKNOWN_TOKEN", f"{arg}={token!r} is not a vault token"
                     )
                 try:
-                    resolved[token] = self._vault.resolve(token)
+                    real = self._vault.resolve(token)
                 except UnknownToken as exc:
                     raise DispatchRejected("UNKNOWN_TOKEN", str(exc)) from exc
+
+                # Knowing an address is not permission to write to it. A token minted from
+                # the BODY of a message is content a stranger controls; only chips, contacts
+                # and the user's own instruction produce a target.
+                if not self._vault.is_addressable(token):
+                    raise DispatchRejected(
+                        "UNTRUSTED_RECIPIENT",
+                        f"{arg}={token} names an address that only ever appeared inside "
+                        "message content. Recipients must come from a contact, a sender, or "
+                        "from what you were asked to do.",
+                    )
+                resolved[token] = real
         return resolved
 
 

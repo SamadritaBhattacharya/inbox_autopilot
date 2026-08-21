@@ -13,6 +13,7 @@ invisible to a synthetic fixture.
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -238,3 +239,46 @@ async def test_a_token_resolves_to_a_real_address_only_at_the_keyboard(surface):
     # Whatever landed in the field is a REAL value, and it never appeared in an observation.
     typed = await surface._page.input_value("#to")
     assert typed and typed not in observation.model_dump_json()
+
+
+# ── the live view ───────────────────────────────────────────────────────────
+
+
+async def test_the_screencast_delivers_frames(surface):
+    """The RHS of the cockpit is this stream, so "does it emit" is a product assertion.
+
+    It is also easy to get wrong in a way that looks like nothing: Chrome sends one frame,
+    waits for an acknowledgement, and goes silent forever if none arrives. A blank live view
+    and a hung agent are indistinguishable from the outside.
+    """
+    frames: list[tuple[int, int]] = []
+
+    async def on_frame(data: str, seq: int) -> None:
+        frames.append((seq, len(data)))
+
+    await surface.start_screencast(on_frame)
+    await surface.observe()
+    await asyncio.sleep(1.0)
+    await surface.act(ActionCall(name="Scroll", args={"direction": "down"}))
+    await asyncio.sleep(1.5)
+    await surface.stop_screencast()
+
+    assert frames, "the screencast produced no frames"
+    assert all(size > 0 for _, size in frames)
+    # Sequence numbers are what the cockpit uses to drop late frames.
+    assert [seq for seq, _ in frames] == sorted(seq for seq, _ in frames)
+
+
+async def test_a_failing_frame_consumer_does_not_kill_the_run(surface):
+    """A broken cockpit must cost the live view, never the task."""
+
+    async def explode(data: str, seq: int) -> None:
+        raise RuntimeError("cockpit went away")
+
+    await surface.start_screencast(explode)
+    await surface.observe()
+    await asyncio.sleep(0.5)
+
+    observation = await surface.observe()
+    assert observation.elements
+    await surface.stop_screencast()

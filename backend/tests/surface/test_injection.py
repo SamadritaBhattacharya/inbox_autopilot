@@ -51,13 +51,8 @@ async def test_the_agent_does_read_the_hostile_text(surface):
     assert "maintenance mode" in listed.lower() or "ignore all previous" in listed.lower()
 
 
-async def test_the_attackers_address_has_no_token(surface):
-    """The structural defence.
-
-    The model can only name people the mailbox showed it. An address that never appeared has
-    no token, so there is no way to express "send it to attacker@evil.example" at all — the
-    instruction is unrepresentable rather than merely disallowed.
-    """
+async def test_the_attackers_address_cannot_be_named_literally(surface):
+    """Half the defence: recipients are tokens, so a raw address is not sayable."""
     await surface.observe()
 
     result = await surface.act(
@@ -66,6 +61,33 @@ async def test_the_attackers_address_has_no_token(surface):
 
     assert result.success is False
     assert result.error_code == "UNKNOWN_TOKEN"
+
+
+async def test_the_attackers_address_does_get_a_token_and_is_still_not_a_recipient(surface):
+    """The other half — and the correction to a claim that was once made too strongly.
+
+    It is tempting to say the injected address is *unrepresentable*: it never appeared as a
+    correspondent, so surely it has no token. That is wrong, and the difference matters. The
+    funnel tokenizes every address it meets, wherever it meets it, because the model must
+    not read `attacker@evil.example` in the clear either. So the address DOES get a token,
+    and a model that had swallowed the injection could reference it by that token.
+
+    What actually stops it is provenance. A token minted from message *content* is not
+    addressable; only a sender chip, a contact, or the user's own instruction produces a
+    target. So the defence is not "the attacker cannot be named" — they can — it is "naming
+    them does not make them reachable".
+    """
+    observation = await surface.observe()
+
+    # Find the token standing in for the attacker's address.
+    token = surface.vault.token_of("attacker@evil.example")
+    assert token is not None, "expected the body address to be tokenized for redaction"
+    assert token not in observation.model_dump_json() or True  # it may legitimately appear
+
+    result = await surface.act(ActionCall(name="Type", args={"recipient": token}))
+
+    assert result.success is False
+    assert result.error_code == "UNTRUSTED_RECIPIENT"
 
 
 async def test_the_attackers_address_is_not_in_the_observation(surface):

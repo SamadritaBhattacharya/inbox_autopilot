@@ -65,6 +65,16 @@ class Settings(BaseSettings):
     # server this still needs a display, so the container runs under xvfb.
     cdp_headless: bool = False
     stealth: bool = True
+    # Attach to a browser that is ALREADY RUNNING and already signed in, instead of
+    # launching a fresh one. Set to e.g. "http://127.0.0.1:9222".
+    #
+    # This exists because Google refuses its sign-in flow inside an automation-controlled
+    # browser ("this browser or app may not be secure"), and no launch flag reliably changes
+    # that. Attaching sidesteps the problem rather than fighting it: the human signs in
+    # normally, in their own browser, and the agent joins a session that is already
+    # authenticated. It is also the honest shape of the product — the agent operates the
+    # user's mailbox in the user's browser.
+    cdp_endpoint: str = ""
     start_url: str = "https://mail.google.com"
     browser_locale: str = "en-IN"
     browser_timezone: str = "Asia/Kolkata"

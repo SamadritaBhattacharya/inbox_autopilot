@@ -65,6 +65,12 @@ export type PendingQuestion = {
   missing: string[];
 };
 
+/** What the agent is doing right now. Transient — never a transcript row. */
+export type Activity = {
+  phase: string;
+  label: string;
+};
+
 export type UsageTotals = {
   calls: number;
   inputTokens: number;

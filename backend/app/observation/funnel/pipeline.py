@@ -200,8 +200,20 @@ class ObservationFunnel:
         return [
             replace(
                 element,
-                name=self._tokenizer.tokenize(element.name),
-                value=self._tokenizer.tokenize(element.value) if element.value else element.value,
+                # A sender or recipient chip is a real correspondent in THIS mailbox, so an
+                # address there is somewhere the agent may legitimately write. An address in
+                # a subject line or a message body is content a stranger controls: tokenized
+                # all the same, but never a valid target.
+                name=self._tokenizer.tokenize(
+                    element.name, addressable=element.role in _PERSON_ROLES
+                ),
+                value=(
+                    self._tokenizer.tokenize(
+                        element.value, addressable=element.role in _PERSON_ROLES
+                    )
+                    if element.value
+                    else element.value
+                ),
             )
             for element in elements
         ]

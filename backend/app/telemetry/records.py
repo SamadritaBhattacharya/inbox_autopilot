@@ -39,6 +39,7 @@ class ErrorCode(StrEnum):
     # ── infrastructure ──
     PROVIDER_EXHAUSTED = "PROVIDER_EXHAUSTED"
     SURFACE_UNAVAILABLE = "SURFACE_UNAVAILABLE"
+    NOT_SIGNED_IN = "NOT_SIGNED_IN"
 
 
 class Usage(BaseModel):

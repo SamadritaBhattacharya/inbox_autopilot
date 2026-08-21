@@ -19,9 +19,12 @@ thing. That is why the loop needs no special handling for popups, navigation, or
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import sys
+from collections.abc import Awaitable, Callable
+from itertools import count
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -102,6 +105,7 @@ class PlaywrightEmailSurface:
         self._page = page
         self._vault = vault or SessionPiiVault()
         self._tokenizer = tokenizer or PiiTokenizer(self._vault)
+
         self._funnel = funnel or ObservationFunnel(self._tokenizer)
 
         #: Rebuilt on every `observe()`. Never carried across turns.
@@ -109,6 +113,85 @@ class PlaywrightEmailSurface:
         self._previous_identities: set[str] = set()
         self._bound_verbs = frozenset(bound_verbs or TIMEOUTS.keys())
         self._approved: set[str] = set()
+        self._cdp = None
+
+    # ── screencast ──────────────────────────────────────────────────────────
+
+    @property
+    def vault(self) -> SessionPiiVault:
+        """The session vault. Read by the composition root so the graph mints tokens the
+        dispatcher can resolve, and by the approval card so a human sees a real address."""
+        return self._vault
+
+    async def start_screencast(
+        self,
+        on_frame: Callable[[str, int], Awaitable[None]],
+        *,
+        quality: int = 55,
+        max_width: int = 1000,
+    ) -> None:
+        """Stream the live page to the cockpit as JPEG frames.
+
+        **Every frame must be acknowledged or Chrome stops sending.** It emits one, waits for
+        the ack, and goes quiet forever if it never comes — which looks exactly like a broken
+        agent rather than a broken transport, and is the single easiest way to get this
+        wrong.
+
+        Quality and width are turned down deliberately. This is a *progress* view: the user
+        is checking that the right field is being filled, not reading the page. A pristine
+        1280px frame several times a second is bandwidth spent on something nobody looks at
+        that closely.
+        """
+        session = await self._page.context.new_cdp_session(self._page)
+        self._cdp = session
+        loop = asyncio.get_running_loop()
+        counter = count(1)
+
+        def handle(params: dict) -> None:
+            # Playwright dispatches CDP events synchronously; the ack and the emit are both
+            # async, so they are scheduled rather than awaited here.
+            loop.create_task(self._ack_frame(session, params, next(counter), on_frame))
+
+        session.on("Page.screencastFrame", handle)
+        await session.send(
+            "Page.startScreencast",
+            {
+                "format": "jpeg",
+                "quality": quality,
+                "maxWidth": max_width,
+                "maxHeight": max_width,
+                # Every frame: a mail UI is mostly still, so this is cheap, and skipping
+                # frames makes typing look like it happens in jumps.
+                "everyNthFrame": 1,
+            },
+        )
+        logger.info("screencast started")
+
+    async def _ack_frame(self, session, params: dict, seq: int, on_frame) -> None:
+        session_id = params.get("sessionId")
+        try:
+            if session_id is not None:
+                await session.send("Page.screencastFrameAck", {"sessionId": session_id})
+        except Exception:
+            return  # page navigated or closed mid-frame; the next one will re-sync
+        data = params.get("data")
+        if not data:
+            return
+        try:
+            await on_frame(data, seq)
+        except Exception:
+            # Never let a broken consumer kill the stream — the browser keeps working and
+            # the run keeps going. But do not swallow it either: a silently failing emitter
+            # produces a blank live view with no diagnostic, which is indistinguishable from
+            # a hung agent and is exactly how this went unnoticed once already.
+            logger.warning("screencast frame %d not delivered", seq, exc_info=True)
+
+    async def stop_screencast(self) -> None:
+        if self._cdp is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._cdp.send("Page.stopScreencast")
+        self._cdp = None
 
     # ── approvals ───────────────────────────────────────────────────────────
 
@@ -365,6 +448,95 @@ def resolve_chromium(*, headless: bool = True) -> str | None:
     return None
 
 
+async def connect_surface(
+    *,
+    endpoint: str,
+    start_url: str | None = None,
+    **surface_kwargs: Any,
+) -> tuple[PlaywrightEmailSurface, Any]:
+    """Attach to a browser that is already running — and already signed in.
+
+    Google refuses its sign-in flow inside an automation-controlled browser, and no launch
+    flag reliably changes that. Rather than fight the check, skip the situation it is
+    checking for: the human signs in normally, in their own browser, and the agent joins a
+    session that is already authenticated.
+
+    We open our **own tab** in the existing profile rather than seizing one of theirs, and
+    on shutdown we close only that tab and disconnect. Closing a user's browser out from
+    under them because a run finished would be its own kind of bug.
+    """
+
+    manager = await _start_playwright()
+    try:
+        browser = await manager.chromium.connect_over_cdp(endpoint)
+    except Exception as exc:
+        await manager.stop()
+        raise SurfaceUnavailable(
+            f"could not attach to a browser at {endpoint} ({exc}). Start Chrome with "
+            "--remote-debugging-port and sign in there first; see docs/RUNNING.md."
+        ) from exc
+
+    # Reuse the signed-in profile's context. A fresh context would have no cookies, which
+    # is the entire thing we came here for.
+    context = browser.contexts[0] if browser.contexts else await browser.new_context()
+    page = await context.new_page()
+
+    surface = PlaywrightEmailSurface(page, **surface_kwargs)
+    if start_url:
+        await page.goto(start_url, wait_until="domcontentloaded")
+    # After navigating, never before: `navigator.userAgentData` is undefined on about:blank,
+    # so checking too early silently reports nothing and the warning never fires.
+    await _warn_if_google_will_reject(page)
+
+    async def close() -> None:
+        await surface.stop_screencast()
+        # Our tab only. `browser.close()` on a CDP connection disconnects rather than
+        # quitting their Chrome, but the tab is ours to clean up.
+        with contextlib.suppress(Exception):
+            await page.close()
+        with contextlib.suppress(Exception):
+            await browser.close()
+        await manager.stop()
+
+    return surface, close
+
+
+async def _warn_if_google_will_reject(page: Any) -> None:
+    """Say up front when this browser is one Google refuses to sign in.
+
+    Chrome for Testing — the build Playwright ships — has no Google API keys, so the
+    sign-in flow ends at "Couldn't sign you in / This browser or app may not be secure."
+    Finding that out at the login wall, after setting everything else up, is a bad way to
+    spend an evening; the browser announces its own brand, so we can just ask.
+    """
+    with contextlib.suppress(Exception):
+        brands = await page.evaluate(
+            "() => (navigator.userAgentData?.brands || []).map(b => b.brand)"
+        )
+        if brands and not any("Google Chrome" in brand for brand in brands):
+            logger.warning(
+                "attached to a browser identifying as %s. Google blocks its sign-in flow "
+                "on non-Google Chrome builds, so Gmail will refuse to log in here. Use "
+                "your installed Chrome: `python scripts/chrome.py signin`.",
+                ", ".join(brands),
+            )
+
+
+async def _start_playwright() -> Any:
+    """Start the Playwright driver, explaining the Windows loop trap if it bites."""
+    from playwright.async_api import async_playwright
+
+    try:
+        return await async_playwright().start()
+    except NotImplementedError as exc:
+        raise SurfaceUnavailable(
+            "this event loop cannot start a browser process. On Windows, uvicorn's "
+            "--reload uses SelectorEventLoop, which cannot spawn subprocesses. Start the "
+            "server with `python -m app.api.dev` (or add "
+            "`--loop app.api.loop:loop_factory`) to get a ProactorEventLoop."
+        ) from exc
+
+
 async def launch_surface(
     *,
     headless: bool = True,
@@ -372,11 +544,10 @@ async def launch_surface(
     **surface_kwargs: Any,
 ) -> tuple[PlaywrightEmailSurface, Any]:
     """Convenience for scripts and integration tests. Returns `(surface, closer)`."""
-    from playwright.async_api import async_playwright
 
     executable = resolve_chromium(headless=headless)
 
-    manager = await async_playwright().start()
+    manager = await _start_playwright()
     try:
         browser = await manager.chromium.launch(headless=headless, executable_path=executable)
     except Exception as exc:
@@ -387,11 +558,13 @@ async def launch_surface(
         ) from exc
 
     page = await browser.new_page(viewport={"width": 1280, "height": 800})
+    surface = PlaywrightEmailSurface(page, **surface_kwargs)
     if start_url:
         await page.goto(start_url, wait_until="domcontentloaded")
 
     async def close() -> None:
+        await surface.stop_screencast()
         await browser.close()
         await manager.stop()
 
-    return PlaywrightEmailSurface(page, **surface_kwargs), close
+    return surface, close

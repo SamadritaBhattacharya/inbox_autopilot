@@ -81,7 +81,8 @@
             "search",
             "sent",
             "drafts",
-            "calendar"
+            "calendar",
+            "signed_out"
           ],
           "title": "View",
           "type": "string"

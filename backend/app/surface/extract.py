@@ -228,6 +228,14 @@ def detect_view(url: str, compose_open: bool) -> str:
     if compose_open:
         return "compose"
     lowered = url.lower()
+
+    # Signed out, or bounced to Google's login. This has to come first and be explicit:
+    # every branch below eventually falls through to "inbox", so a sign-in wall was being
+    # reported as a mailbox. The agent then dutifully "summarized the inbox" from a page
+    # that said "Couldn't sign you in" - it burned six steps and produced a confident,
+    # entirely fictional answer. A view the agent cannot act in must say so by name.
+    if "accounts.google.com" in lowered or "/signin" in lowered or "servicelogin" in lowered:
+        return "signed_out"
     for fragment, view in (
         ("#sent", "sent"),
         ("#drafts", "drafts"),

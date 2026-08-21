@@ -131,6 +131,10 @@ class EventEmitter:
             {"contextId": context_id, "elements": elements, "droppedCount": dropped, "view": view},
         )
 
+    async def activity(self, phase: str, label: str = "") -> None:
+        """What is happening right now. Transient — never a transcript row."""
+        await self._emit(protocol.ACTIVITY, {"phase": phase, "label": label})
+
     async def frame(self, jpeg_base64: str, seq: int) -> None:
         # Not redacted: it is image bytes, and scrubbing a base64 blob would be a pointless
         # scan over megabytes on every frame.

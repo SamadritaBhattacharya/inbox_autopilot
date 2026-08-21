@@ -27,6 +27,8 @@ from app.manager.slots import (
 )
 from app.prompts import load_prompt
 from app.rules.store import RulesStore
+from app.security.patterns import find_emails
+from app.security.vault import SessionPiiVault
 from app.telemetry.records import ErrorCode, StepRecord
 from app.workers.registry import worker_for
 
@@ -82,7 +84,11 @@ def _parse_intent(raw: str) -> TaskIntent:
     )
 
 
-def build_intake_node(llm: LLMClient, emitter: EventEmitter | None = None):
+def build_intake_node(
+    llm: LLMClient,
+    emitter: EventEmitter | None = None,
+    vault: SessionPiiVault | None = None,
+):
     """NL task -> typed `TaskIntent`. No side effects, no mailbox access."""
 
     async def intake(state: AgentState) -> dict:
@@ -94,6 +100,17 @@ def build_intake_node(llm: LLMClient, emitter: EventEmitter | None = None):
             ],
         )
         intent = _parse_intent(result.text or result.reasoning)
+
+        # An address the USER typed is trusted input: they chose it, so it is somewhere they
+        # meant to write. Minting it here is what makes "send an email to alice@x.com" work
+        # at all — the dispatcher only accepts vault tokens, and an address that never
+        # appeared on the page would otherwise have none.
+        #
+        # This is the same distinction that refuses a recipient lifted out of a hostile email
+        # body, seen from the other side: what matters is not the address, it is who put it
+        # there.
+        if vault is not None:
+            intent = _trust_user_addresses(intent, vault)
 
         logger.info("intake: %s (confidence %.2f)", intent.action, intent.action_confidence)
         if emitter is not None:
@@ -118,6 +135,20 @@ def build_intake_node(llm: LLMClient, emitter: EventEmitter | None = None):
         }
 
     return intake
+
+
+def _trust_user_addresses(intent: TaskIntent, vault: SessionPiiVault) -> TaskIntent:
+    """Replace operator-supplied addresses in the intent with addressable tokens."""
+    updated: dict[str, str] = {}
+    for slot, value in intent.slots.items():
+        addresses = find_emails(value)
+        if not addresses:
+            continue
+        rewritten = value
+        for address in addresses:
+            rewritten = rewritten.replace(address, vault.trust(address))
+        updated[slot] = rewritten
+    return intent.with_slots(**updated) if updated else intent
 
 
 def build_context_gate_node(*, threshold: float = 0.85, max_asks: int = MAX_ASKS):

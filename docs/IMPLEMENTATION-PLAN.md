@@ -527,3 +527,93 @@ The rhythm every milestone follows:
 3. **One task, one commit, one green run.** Never batch.
 4. **The decisions log is the artifact that ages best.** Six months on, the reasoning is worth more
    than the code — write down what was rejected and why, not only what was chosen.
+
+
+### Tokenizing an address is not endorsing it as a recipient
+
+The injection suite asserted that the attacker's address "has no token, so the instruction is
+unrepresentable". Probing the real funnel against the hostile fixture disproved it: the vault held
+`P1 -> attacker@evil.example`, minted from the message body, because redaction is unconditional and
+the model must not read that address in the clear either.
+
+So the address *was* nameable. Only the approval card stood between an injected instruction and a
+send — which is the designed guarantee, but a thinner margin than the docs claimed.
+
+The vault now records **provenance**. Every address is still tokenized; only addresses from a
+structured position (sender/recipient/contact/chip) or from the user's own instruction are
+*addressable*, and `ActionValidator` refuses the rest with `UNTRUSTED_RECIPIENT`. Provenance upgrades
+but never downgrades, so quoting a colleague's address in a phishing body cannot make that colleague
+unreachable.
+
+The same change fixed a live bug from the other direction: `send an email to alice@x.com` was
+unimplementable, because the address is not on the page and the dispatcher takes only tokens. Intake
+now mints operator-supplied addresses as trusted. Same distinction, both directions: what matters is
+not the address, it is who put it there.
+
+
+### `--reload` on Windows gives you a loop that cannot start a browser
+
+`uvicorn app.api.main:app --reload` failed with a bare `NotImplementedError` whose message
+was the empty string, raised from `asyncio.create_subprocess_exec` inside Playwright's
+transport. Nothing in the traceback mentions browsers.
+
+The cause is in `uvicorn/loops/asyncio.py`:
+
+    if sys.platform == "win32" and not use_subprocess:
+        return asyncio.ProactorEventLoop
+    return asyncio.SelectorEventLoop
+
+`use_subprocess` is true when uvicorn manages processes itself, which `--reload` turns on. On
+Windows only `ProactorEventLoop` can spawn a child process, and Playwright starts Chromium as
+one — so the standard dev command is precisely the configuration that cannot drive a browser.
+
+Three fixes, because the bug had three faces:
+
+- **The cause** — `app/api/loop.py` supplies a loop factory, and `python -m app.api.dev`
+  runs uvicorn with it. Reload still works.
+- **The message** — `launch_surface` catches `NotImplementedError` and raises
+  `SurfaceUnavailable` naming the fix. The empty string had been reaching the cockpit as
+  "could not start the browser:" and then stopping.
+- **The silence** — our loggers had no handler under uvicorn's logging config, so every
+  `logger.warning` in the codebase went nowhere. `app/api/main.py` now configures the root
+  logger if nothing else has, and logs at startup whether this process can drive a browser
+  at all.
+
+A detail worth recording: while debugging, three WebSocket probes reported the Selector-loop
+failure *after* the fix was in place. The fix was fine; a stale `--reload` server from an
+earlier session still held port 8000, so the probes were connecting to the old process. Two
+of the three "failures" were measurements of the wrong server.
+
+
+### Three bugs behind one screenshot
+
+A single cockpit screenshot showed Gmail's "Couldn't sign you in" wall, a wall of model
+reasoning, and the live view scrolled off the top. Three unrelated defects.
+
+**1. Google rejects Chrome for Testing.** The browser in the shot was labelled "Chrome for
+Testing" — Playwright's bundled build, which has no Google API keys, so Google refuses its
+sign-in flow by design. No flag fixes it. `scripts/chrome.py` now launches the user's *real*
+Chrome in two phases: `signin` (ordinary window, no debugging port, no automation flags) and
+`serve` (same profile, port open). Nothing ever authenticates under automation. Attaching
+also detects the wrong browser up front, by reading `navigator.userAgentData.brands` —
+`Google Chrome` present means genuine Chrome, and its absence now produces a warning naming
+the fix instead of a dead end at the login page. The check must run *after* navigation:
+`userAgentData` is undefined on `about:blank`, and checking too early silently reports
+nothing.
+
+**2. `AskUser` was bound but not handled.** `handle_internal` had no branch for it, so it
+fell through to `"AskUser is not handled"`. The model asked, was told the tool did not work,
+reasoned at length about whether it had called it wrongly, tried again, and ran out of
+steps — while a remediation strategy actively recommends that verb by name. It now raises a
+real `interrupt()`, so the run pauses, the cockpit shows a question card, and the answer
+comes back into the transcript. A structural test now asserts every verb in `CONTROL_TOOLS`
+has a handler, because binding a tool the dispatcher ignores is a uniquely bad failure mode:
+the model is told the tool exists, and then told it does not work.
+
+**3. The page scrolled instead of the transcript.** `scrollIntoView` walks up and scrolls
+*every* scrollable ancestor, so with a `min-h-full` body it scrolled the document and carried
+the live browser view off the top on each new message. Fixed twice over: the transcript sets
+`scrollTop` on its own container (which cannot touch ancestors) and holds position when the
+user has scrolled up to read, and the cockpit is `fixed inset-0` so the document has nothing
+to scroll regardless of the height chain above it. A height alone would only be as good as
+that chain — one `min-h-full` anywhere and the bug returns.

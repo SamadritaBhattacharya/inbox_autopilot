@@ -23,7 +23,12 @@ GEOMETRY = {1: (10.0, 20.0), 2: (30.0, 40.0), 7: (100.0, 200.0)}
 @pytest.fixture
 def vault() -> SessionPiiVault:
     vault = SessionPiiVault()
-    PiiTokenizer(vault).tokenize("priya@corp.com and dev@corp.com")  # mints P1, P2
+    tokenizer = PiiTokenizer(vault)
+    # Correspondents: minted from a structured position, so they are legitimate targets.
+    tokenizer.tokenize("priya@corp.com and dev@corp.com", addressable=True)  # P1, P2
+    # Seen only in the body of a message. Tokenized (the model must not read it) but NOT a
+    # place the agent may send mail — see `test_an_address_from_a_message_body...`.
+    tokenizer.tokenize("attacker@evil.example")  # P3
     return vault
 
 
@@ -78,6 +83,44 @@ def test_a_minted_token_resolves_at_dispatch_and_not_before(vault):
 def test_several_recipients_resolve(vault):
     resolved = validator(vault).validate(ActionCall(name="Type", args={"recipient": "P1, P2"}))
     assert set(resolved.resolved_args or {}) == {"P1", "P2"}
+
+
+def test_an_address_from_a_message_body_is_known_but_not_addressable(vault):
+    """The injected-recipient case, stated honestly.
+
+    The funnel tokenizes every address it meets, including one inside a hostile email body
+    — that is redaction, and it is unconditional. What must not follow is that the address
+    thereby becomes a valid recipient. Tokenizing is hiding, not endorsing, and only
+    provenance separates the two.
+    """
+    assert vault.knows("P3")  # it has a token
+    assert not vault.is_addressable("P3")  # and it is still not somewhere we can write
+
+    with pytest.raises(DispatchRejected) as exc:
+        validator(vault).validate(ActionCall(name="Type", args={"recipient": "P3"}))
+    assert exc.value.error_code == "UNTRUSTED_RECIPIENT"
+
+
+def test_an_address_the_user_typed_is_addressable(vault):
+    """The other half: an address in the operator's own instruction is trusted input.
+
+    Without this, `send an email to alice@x.com` is unimplementable — the address is not on
+    the page, so it has no token, and the dispatcher takes only tokens.
+    """
+    token = vault.trust("alice@x.example")
+    assert vault.is_addressable(token)
+    resolved = validator(vault).validate(ActionCall(name="Type", args={"recipient": token}))
+    assert resolved.resolved_args == {token: "alice@x.example"}
+
+
+def test_seeing_an_address_in_a_body_does_not_revoke_a_real_correspondent(vault):
+    """Provenance upgrades, never downgrades.
+
+    An attacker who quotes your colleague's address in a phishing body must not thereby
+    make your colleague unreachable — that would be a denial-of-service on the agent.
+    """
+    PiiTokenizer(vault).tokenize("priya@corp.com")  # body mention, addressable=False
+    assert vault.is_addressable("P1")
 
 
 def test_a_literal_address_cannot_be_targeted(vault):

@@ -18,11 +18,21 @@ import { Viewport } from "./Viewport";
  * reason this is Next.js rather than a plain SPA. If a second client root appears, that
  * benefit is quietly gone.
  */
+/** Present tense, because it is happening now. */
+const ACTIVITY_VERB: Record<string, string> = {
+  looking: "Reading the screen",
+  thinking: "Thinking",
+  acting: "Acting",
+  waiting: "Waiting for you",
+  blind: "Running without a live view",
+};
+
 export function CockpitClient({ threadId, task }: { threadId: string; task?: string }) {
   const {
     timeline,
     question,
     approval,
+    activity,
     usage,
     status,
     connected,
@@ -36,10 +46,31 @@ export function CockpitClient({ threadId, task }: { threadId: string; task?: str
     subscribeFrame,
   } = useAgentRun(threadId, task);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
+  /**
+   * Auto-scroll the transcript — and ONLY the transcript.
+   *
+   * `scrollIntoView` was the wrong tool: it walks up and scrolls every scrollable
+   * ancestor, so once the page itself could scroll it dragged the whole layout, carrying
+   * the live browser view off the top of the screen on every new message. Setting
+   * `scrollTop` on the container cannot touch anything above it.
+   *
+   * It also holds position when the user has scrolled up to read. Yanking someone back to
+   * the bottom mid-sentence because a token arrived is its own bug.
+   */
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef(true);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [timeline, question, approval, options]);
+    const el = scrollRef.current;
+    if (!el || !pinnedRef.current) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [timeline, question, approval, options, activity]);
 
   const lastAction = [...timeline].reverse().find((entry) => entry.kind === "action");
   const currentAction = lastAction?.kind === "action" ? lastAction.name : undefined;
@@ -62,10 +93,19 @@ export function CockpitClient({ threadId, task }: { threadId: string; task?: str
   }
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col gap-3 p-3 lg:flex-row lg:gap-4 lg:p-4">
+    // `fixed inset-0`, not `h-screen`: this takes the cockpit out of page flow entirely,
+    // so the document has nothing to scroll no matter what the body or a parent layout
+    // does. A height alone is only as good as the height chain above it, and one
+    // `min-h-full` anywhere in that chain brings back the bug where the live browser view
+    // slides off the top as the transcript grows. Only the transcript scrolls.
+    <main className="fixed inset-0 flex flex-col gap-3 overflow-hidden p-3 lg:flex-row lg:gap-4 lg:p-4">
       {/* Live browser: on top on mobile, the hero on the right at desktop widths. */}
       <section className="h-[38vh] min-h-0 min-w-0 shrink-0 lg:order-2 lg:h-auto lg:flex-1">
-        <Viewport subscribeFrame={subscribeFrame} status={status} action={currentAction} />
+        <Viewport
+          subscribeFrame={subscribeFrame}
+          status={status}
+          action={activity?.label || currentAction}
+        />
       </section>
 
       {/* Conversation rail: header → transcript → composer, one continuous column. */}
@@ -92,12 +132,29 @@ export function CockpitClient({ threadId, task }: { threadId: string; task?: str
           </span>
         </header>
 
-        <div className="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pt-3">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pt-3"
+        >
           <Transcript timeline={timeline} />
           {question && <QuestionCard question={question} onAnswer={answer} />}
           {approval && <ApprovalCard approval={approval} onDecide={decide} />}
           {options && <OptionsCard options={options} onChoose={choose} />}
-          <div ref={bottomRef} className="h-3" />
+          {activity && !question && !approval && !options && (
+            <div className="rise flex items-center gap-2.5 py-3">
+              <span className="flex gap-1" aria-hidden>
+                <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:0ms]" />
+                <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:150ms]" />
+                <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
+              </span>
+              <span className="text-[13px] text-muted">
+                {ACTIVITY_VERB[activity.phase] ?? activity.phase}
+                {activity.label && <span className="text-faint"> — {activity.label}</span>}
+              </span>
+            </div>
+          )}
+          <div className="h-3" />
         </div>
 
         <footer className="shrink-0 space-y-2 border-t border-line bg-ink/40 px-4 pb-3 pt-2.5">

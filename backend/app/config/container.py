@@ -88,16 +88,46 @@ class AppContainer:
         if self.settings.email_surface != "playwright":
             return None, noop
 
-        from app.surface.playwright_surface import launch_surface
+        from app.surface.browser_thread import (
+            BrowserLoop,
+            ThreadedSurface,
+            loop_can_spawn_subprocesses,
+        )
+        from app.surface.playwright_surface import connect_surface, launch_surface
 
         security = self.new_session_security()
-        surface, close = await launch_surface(
-            headless=self.settings.cdp_headless,
-            start_url=self.settings.start_url,
-            vault=security.vault,
-            tokenizer=security.tokenizer,
-        )
-        return surface, close
+        kwargs = {"vault": security.vault, "tokenizer": security.tokenizer}
+
+        if self.settings.cdp_endpoint:
+            # Attach to the user's own signed-in browser.
+            async def build():
+                return await connect_surface(
+                    endpoint=self.settings.cdp_endpoint,
+                    start_url=self.settings.start_url,
+                    **kwargs,
+                )
+        else:
+            async def build():
+                return await launch_surface(
+                    headless=self.settings.cdp_headless,
+                    start_url=self.settings.start_url,
+                    **kwargs,
+                )
+
+        # The server does not get to choose its own event loop, and on Windows uvicorn
+        # hands us one that cannot spawn the browser process. Rather than require a
+        # particular start command, give the browser a loop of its own when it needs one.
+        if loop_can_spawn_subprocesses():
+            return await build()
+
+        browser_loop = BrowserLoop()
+        surface, close_inner = await browser_loop.call(build())
+
+        async def close() -> None:
+            await browser_loop.call(close_inner())
+            await browser_loop.shutdown()
+
+        return ThreadedSurface(surface, browser_loop), close
 
     def build_graph(
         self,
@@ -105,6 +135,7 @@ class AppContainer:
         emitter=None,
         feedback: FeedbackStore | None = None,
         surface: EmailSurface | None = None,
+        vault=None,
     ):
         """Compile a graph from the wired ports.
 
@@ -117,6 +148,7 @@ class AppContainer:
             llm=self.require_llm(),
             surface=surface if surface is not None else self.surface,
             emitter=emitter,
+            vault=vault,
             rules=self.rules,
             feedback=feedback or self.feedback,
             threshold=self.settings.context_confidence_threshold,

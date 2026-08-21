@@ -56,7 +56,11 @@ class PiiTokenizer:
         if len(cleaned) < 3 or "@" in cleaned or TOKEN_RE.fullmatch(cleaned):
             return None
 
-        token = self._vault.token_for(cleaned, PiiKind.PERSON)
+        # Reached only from a structured position (see the funnel's `_is_person_field`), so
+        # this is a real correspondent in this mailbox and a legitimate target — unlike a
+        # name the tokenizer later substitutes into prose, which proves nothing about who
+        # the mailbox actually knows.
+        token = self._vault.token_for(cleaned, PiiKind.PERSON, addressable=True)
         if not any(existing == cleaned for _, existing in self._person_patterns):
             self._person_patterns.append((re.compile(re.escape(cleaned), re.IGNORECASE), cleaned))
             self._person_patterns.sort(key=lambda item: len(item[1]), reverse=True)
@@ -64,11 +68,16 @@ class PiiTokenizer:
 
     # ── the stage ───────────────────────────────────────────────────────────
 
-    def tokenize(self, text: str) -> str:
+    def tokenize(self, text: str, *, addressable: bool = False) -> str:
         """Rewrite every identifier in `text` as a stable token.
 
         Idempotent: running it over already-tokenized text is a no-op, so a double pass
         cannot produce `PP17`.
+
+        `addressable` says whether this text came from somewhere the operator controls — a
+        sender chip, say, rather than the body of a message a stranger wrote. It has no
+        effect on redaction (everything is tokenized either way) and everything to do with
+        whether the resulting token may later be used as a recipient.
         """
         if not text:
             return text
@@ -76,7 +85,9 @@ class PiiTokenizer:
         # Emails first. An address contains name-like and word-like parts, so any other
         # pass running first would carve it up and leave fragments of a real address behind.
         for email in find_emails(text):
-            text = text.replace(email, self._vault.token_for(email, PiiKind.EMAIL))
+            text = text.replace(
+                email, self._vault.token_for(email, PiiKind.EMAIL, addressable=addressable)
+            )
 
         for phone in find_phones(text):
             text = text.replace(phone, self._vault.token_for(phone, PiiKind.PHONE))

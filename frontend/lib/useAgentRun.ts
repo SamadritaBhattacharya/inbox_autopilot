@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { env } from "./env";
 import {
+  type Activity,
   bool,
   num,
   str,
@@ -37,6 +38,9 @@ export function useAgentRun(threadId: string, task?: string) {
   const [status, setStatus] = useState<RunStatus>("idle");
   const [connected, setConnected] = useState(false);
   const [absent, setAbsent] = useState(false);
+  // Transient by design: the LATEST activity replaces the last one, and it is cleared
+  // when the run ends. Keeping a history of them would just be a noisier transcript.
+  const [activity, setActivity] = useState<Activity | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const frameHandlers = useRef(new Set<FrameHandler>());
@@ -80,6 +84,11 @@ export function useAgentRun(threadId: string, task?: string) {
         return;
       }
 
+      if (frame.event === "activity") {
+        setActivity({ phase: str(frame.data.phase), label: str(frame.data.label) });
+        return;
+      }
+
       if (frame.event === "run_absent") {
         setAbsent(true);
         setStatus("idle");
@@ -89,7 +98,10 @@ export function useAgentRun(threadId: string, task?: string) {
       setEvents((previous) => [...previous, frame]);
 
       if (["question", "approval_request", "options"].includes(frame.event)) setStatus("awaiting");
-      else if (frame.event === "run_complete") setStatus("done");
+      else if (frame.event === "run_complete") {
+        setStatus("done");
+        setActivity(null);
+      }
       else if (frame.event === "finalize") setStatus(bool(frame.data.success) ? "done" : "failed");
       else if (frame.event === "status") {
         const phase = str(frame.data.phase);
@@ -142,6 +154,7 @@ export function useAgentRun(threadId: string, task?: string) {
     timeline,
     question,
     approval,
+    activity,
     usage,
     status,
     connected,

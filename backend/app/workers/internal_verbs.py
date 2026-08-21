@@ -10,6 +10,7 @@ performs it; if it changes what the RUN KNOWS, this module does.
 from __future__ import annotations
 
 from inbox_contracts import ActionCall
+from langgraph.types import interrupt
 
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
@@ -81,6 +82,33 @@ async def handle_internal(call: ActionCall, state: AgentState, emitter: EventEmi
                         "Proposed (not created, nobody invited). Tell the user what you "
                         "drafted, then Complete."
                     ),
+                    tool_call_id=call.name,
+                )
+            ],
+        }
+
+    if call.name == "AskUser":
+        # A real pause, not a message into the void.
+        #
+        # This verb was bound and then not handled, which is worse than not offering it: the
+        # model asked, got "AskUser is not handled" back, reasoned at length about whether it
+        # had called it wrongly, tried again, and burned its step budget on a tool that
+        # looked available. A remediation strategy actively recommends this verb, so the gap
+        # was reachable by design rather than by accident.
+        #
+        # `interrupt()` raises out of the act node; the runtime checkpoints and stops. The
+        # transport turns the payload into a question card, and `Command(resume=...)`
+        # re-enters this node with the answer. Nothing is parked in memory, so the run
+        # survives a disconnect while it waits.
+        question = str(args.get("question") or "").strip() or "What would you like me to do?"
+        await emitter.activity("waiting", "asking you a question")
+        answer = interrupt({"question": question, "missing": [], "task": state.task})
+        return {
+            "status": "running",
+            "messages": [
+                Message(
+                    role="tool",
+                    content=f"The operator answered: {answer}",
                     tool_call_id=call.name,
                 )
             ],

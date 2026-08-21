@@ -47,10 +47,20 @@ class SessionPiiVault:
         self._forward: dict[str, str] = {}
         self._reverse: dict[str, str] = {}
         self._counters: dict[PiiKind, int] = dict.fromkeys(PiiKind, 0)
+        # Tokens that may be used as an ACTION TARGET.
+        #
+        # Every address on the page is tokenized — that is redaction, and it is unconditional.
+        # But tokenizing an address is not the same as endorsing it as a recipient. An address
+        # sitting in the body of a hostile email gets a token so the model never sees it in
+        # the clear; it must NOT thereby become somewhere the agent can send mail.
+        #
+        # Addressable means the value came from somewhere the OPERATOR controls: a sender or
+        # recipient chip (a person genuinely in this mailbox), or the user's own instruction.
+        self._addressable: set[str] = set()
 
     # ── minting ─────────────────────────────────────────────────────────────
 
-    def token_for(self, value: str, kind: PiiKind) -> str:
+    def token_for(self, value: str, kind: PiiKind, *, addressable: bool = False) -> str:
         """The token for `value`, minting one on first sight.
 
         Normalised on the way in so `Alice@Corp.com` and `alice@corp.com` are one person
@@ -59,7 +69,12 @@ class SessionPiiVault:
         """
         normalised = self._normalise(value, kind)
         if normalised in self._forward:
-            return self._forward[normalised]
+            token = self._forward[normalised]
+            # Upgrade only, never downgrade: an address seen once in a structured position
+            # is a real correspondent, whatever else it also appears inside.
+            if addressable:
+                self._addressable.add(token)
+            return token
 
         self._counters[kind] += 1
         token = f"{TOKEN_PREFIX[kind]}{self._counters[kind]}"
@@ -67,6 +82,8 @@ class SessionPiiVault:
         # The reverse map keeps the ORIGINAL spelling: what gets typed into Gmail should be
         # what the user actually wrote, not our lowercased version.
         self._reverse[token] = value
+        if addressable:
+            self._addressable.add(token)
         return token
 
     @staticmethod
@@ -94,6 +111,32 @@ class SessionPiiVault:
 
     def knows(self, token: str) -> bool:
         return token.strip() in self._reverse
+
+    def token_of(self, value: str, kind: PiiKind = PiiKind.EMAIL) -> str | None:
+        """The token standing in for `value`, if this session ever minted one.
+
+        For tests and for the approval card, never for the model.
+        """
+        return self._forward.get(self._normalise(value, kind))
+
+    def is_addressable(self, token: str) -> bool:
+        """May this token be used as an action TARGET?
+
+        False for anything the vault only ever saw inside page content. That is the
+        difference between "the model must not read this address" and "the agent may send
+        mail here", and conflating them is what lets an injected instruction pick a
+        recipient.
+        """
+        return token.strip() in self._addressable
+
+    def trust(self, value: str, kind: PiiKind = PiiKind.EMAIL) -> str:
+        """Mint a token the operator supplied, and mark it addressable.
+
+        An address in the USER's own instruction is trusted input: they typed it, so it is
+        somewhere they meant to write to. An address in an email body is not, however
+        confidently the email asserts otherwise.
+        """
+        return self.token_for(value, kind, addressable=True)
 
     # ── introspection, for tests and the leak suite ─────────────────────────
 

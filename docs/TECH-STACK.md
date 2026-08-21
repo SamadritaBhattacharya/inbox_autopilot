@@ -207,7 +207,7 @@ just setup          # uv sync + playwright install chromium + pnpm install + gen
 just gen-contracts  # Pydantic → JSON Schema → Zod → build @inbox/contracts
 just check          # regenerate contracts and fail on drift
 just test           # backend pytest + contracts pytest + pnpm -r test
-just dev-backend    # uvicorn app.api.main:app --reload
+just dev-backend    # python -m app.api.dev  (uvicorn --reload + a browser-capable loop)
 just dev-frontend   # pnpm -C frontend dev  (Next.js)
 just bench          # run the fixture benchmark suite
 ```

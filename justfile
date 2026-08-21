@@ -50,8 +50,10 @@ lint:
     uv run --project backend ruff check backend packages/contracts scripts
 
 # Dev servers
+# Not plain `uvicorn --reload`: on Windows that selects an event loop which cannot spawn
+# the browser process. See app/api/loop.py.
 dev-backend:
-    uv run --project backend uvicorn app.api.main:app --reload
+    uv run --project backend python -m app.api.dev
 
 dev-frontend:
     pnpm -C frontend dev

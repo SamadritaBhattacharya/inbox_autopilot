@@ -60,7 +60,9 @@ class Element(BaseModel):
     is_new: bool = Field(default=False, alias="isNew")
 
 
-MailView = Literal["inbox", "thread", "compose", "search", "sent", "drafts", "calendar"]
+MailView = Literal[
+    "inbox", "thread", "compose", "search", "sent", "drafts", "calendar", "signed_out"
+]
 
 
 class MailContext(BaseModel):

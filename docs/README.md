@@ -9,6 +9,7 @@ Read in this order.
 | # | Doc | What it answers |
 | --- | --- | --- |
 | 0 | [`../CLAUDE.md`](../CLAUDE.md) | **The contract.** How to build and work in this repo. Read before writing code. |
+| — | [`RUNNING.md`](RUNNING.md) | **Start here to use it.** Pointing it at your real Gmail, and why you cannot sign in inside the agent's browser. |
 | 1 | [`PRD.md`](PRD.md) | What we are building, for whom, and how we know it works. |
 | 2 | [`SYSTEM-DESIGN.md`](SYSTEM-DESIGN.md) | The AI system design: graph topology, state, nodes, workers, funnel, failure layer. |
 | 3 | [`TECH-STACK.md`](TECH-STACK.md) | Every technology, why it was chosen, and the $0 budget math. |

@@ -137,7 +137,7 @@ Defense in depth, with the load-bearing layer being **structural, not textual**:
 | 1 | **Approval interrupts on every irreversible verb** | **structural** | The attack above cannot send. `Send` has no code path to `EmailSurface.act()` without a recorded human `Decision`. This is the layer that actually holds. |
 | 2 | **Task-scoped intent** | structural | `context_gate` fixes the intent *before* any content is read. A triage run has no `send_email` capability bound — the tool is not in the worker's schema at all. |
 | 3 | **Content/instruction separation** | prompt | Observation content is rendered inside an explicitly-framed untrusted-data block. The system prompt states that page and message text is data to be reasoned *about*, never instruction to be followed. |
-| 4 | **Tokenized recipients** | structural | The model cannot name `attacker@evil.com`; it can only reference tokens the vault created from the page. A recipient that never appeared in the mailbox has no token. |
+| 4 | **Recipient provenance** | structural | Recipients are vault tokens, never literal addresses — and not every token is a valid target. Only an address from a place the *operator* controls (a sender or recipient chip, a contact row, or the user's own instruction) is **addressable**. An address the funnel met inside message *content* is tokenized for redaction but refused at dispatch with `UNTRUSTED_RECIPIENT`. |
 | 5 | **Verify step** | structural | Post-action contract checks catch an outcome that does not match the stated intent. |
 | 6 | **Repetition + step budget guards** | structural | A "archive everything forever" instruction hits the step budget and terminates typed. |
 | 7 | **Rules auto-send off by default** | structural | The one path that could bypass approval is disabled and cannot be enabled by config alone. |
@@ -146,12 +146,42 @@ Defense in depth, with the load-bearing layer being **structural, not textual**:
 Every actual guarantee in the table is enforced by graph topology, tool binding, or an interrupt —
 things an injected string cannot argue with.
 
+### 4.2.1 A correction: tokenization is not endorsement
+
+An earlier draft of layer 4 claimed the attacker's address was *unrepresentable* — that it never
+appeared as a correspondent, so it had no token, so the instruction could not even be formed. That
+was wrong, and the way it was wrong is instructive.
+
+The funnel tokenizes **every** address it meets, wherever it meets it, because the model must not
+read `attacker@evil.example` in the clear any more than it may read a colleague's. So the injected
+address does get a token. A model that had swallowed the injection could have referenced it by that
+token, and the only thing between that and a send would have been a human reading the approval card.
+
+The fix is to separate two things the vault had been conflating:
+
+- **Knowing** an address — required for redaction, and therefore unconditional.
+- **Being allowed to write to it** — a much smaller set, and one an attacker must not be able to
+  join by mentioning an address in an email.
+
+`SessionPiiVault` now records provenance alongside each token. `is_addressable()` is true only for
+values minted from a structured position or from the operator's own instruction, and `ActionValidator`
+consults it before resolving any recipient. Provenance **upgrades but never downgrades**: an attacker
+who quotes your colleague's address in a phishing body does not thereby make your colleague
+unreachable, which would be a denial-of-service on the agent.
+
+The honest claim is therefore not "the attacker cannot be named". They can. It is **"naming them does
+not make them reachable"** — and that is asserted against a real browser in
+`test_the_attackers_address_does_get_a_token_and_is_still_not_a_recipient`.
+
 ### 4.3 Injection-specific tests
 
 - `test_injected_send_instruction_is_not_executed` — a fixture inbox containing the §4.1 email; run a
   triage task; assert zero send-shaped `ActionCall`s were dispatched.
-- `test_untokenized_recipient_cannot_be_targeted` — assert an address never observed has no token and
-  a `Type` targeting a raw address is rejected at dispatch.
+- `test_the_attackers_address_cannot_be_named_literally` — a `Type` carrying a raw address is
+  rejected at dispatch (`UNKNOWN_TOKEN`).
+- `test_the_attackers_address_does_get_a_token_and_is_still_not_a_recipient` — the body address **is**
+  tokenized, and targeting it by that token is refused (`UNTRUSTED_RECIPIENT`). See §4.2.1.
+- `test_seeing_an_address_in_a_body_does_not_revoke_a_real_correspondent` — provenance upgrades only.
 - `test_triage_worker_has_no_send_tool` — assert the bound tool schema for `TriageWorker` excludes
   every gated verb.
 

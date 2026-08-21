@@ -50,10 +50,26 @@ async def drive(run: Run, container: AppContainer, task: str) -> None:
         return
     run.cleanup = close_surface
 
+    # Live browser frames. Best-effort: a run that works without a picture is still a working
+    # run, so a screencast that cannot start must never take the run down with it.
+    if surface is not None and hasattr(surface, "start_screencast"):
+        try:
+            await surface.start_screencast(
+                lambda jpeg, seq: emitter.frame(jpeg, seq)
+            )
+        except Exception as exc:
+            logger.warning("screencast unavailable: %s", exc)
+            await emitter.activity("blind", "no live view for this run")
+
     # The emitter MUST reach the graph, or nodes stream nothing and the cockpit shows a run
     # that appears to do nothing until it finishes.
+    # The SAME vault the surface uses. A separate one would mint tokens at intake that the
+    # dispatcher could not resolve — the recipient would exist and be unreachable.
     graph = container.build_graph(
-        emitter=emitter, feedback=container.feedback, surface=surface
+        emitter=emitter,
+        feedback=container.feedback,
+        surface=surface,
+        vault=getattr(surface, "vault", None),
     )
     config = {"configurable": {"thread_id": run.thread_id}}
     payload: object = {"task": task, "thread_id": run.thread_id}
