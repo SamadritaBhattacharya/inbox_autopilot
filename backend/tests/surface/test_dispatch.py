@@ -248,3 +248,66 @@ def test_a_rejection_becomes_a_typed_result(vault):
     result = exc.value.to_result()
     assert result.success is False
     assert result.error_code == "STALE_INDEX"
+
+
+# ── typing a person into a field that is not "recipient" ────────────────────
+
+
+class TestWholeTokenTextIsResolved:
+    """"search arnabhsinha888@gmail.com" typed the characters "P1" into Gmail's search box.
+
+    Intake tokenizes the task, so the model correctly asked for `Type(text="P1")` — but
+    `text` was a literal argument and only `recipient`/`cc`/`bcc` were ever resolved. The
+    model did the right thing and the dispatcher typed a placeholder.
+
+    The fix is deliberately narrow: a WHOLE-value token is resolved, a sentence never is.
+    """
+
+    def setup_method(self):
+        self.vault = SessionPiiVault()
+        self.token = self.vault.trust("arnabhsinha888@gmail.com")
+
+    def validator(self) -> ActionValidator:
+        return ActionValidator(
+            vault=self.vault,
+            geometry={4: (1.0, 2.0)},
+            bound_verbs={"Type"},
+        )
+
+    def typed(self, **args) -> str:
+        from app.surface.playwright_surface import PlaywrightEmailSurface
+
+        resolved = self.validator().validate(ActionCall(name="Type", args={"index": 4, **args}))
+        return PlaywrightEmailSurface._text_for(None, resolved)  # noqa: SLF001
+
+    def test_a_whole_token_in_text_becomes_the_real_value(self):
+        assert self.typed(text=self.token) == "arnabhsinha888@gmail.com"
+
+    def test_a_recipient_token_still_resolves(self):
+        assert self.typed(recipient=self.token) == "arnabhsinha888@gmail.com"
+
+    def test_several_tokens_resolve_together(self):
+        other = self.vault.trust("someone.else@corp.com")
+        assert self.typed(text=f"{self.token}, {other}") == (
+            "arnabhsinha888@gmail.com, someone.else@corp.com"
+        )
+
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            "the P2 bug is blocking Q1",
+            "P1 priority items for review",
+            "see attached P3 report",
+            "Good evening. Hope the week is going well.",
+        ],
+    )
+    def test_prose_is_typed_verbatim(self, prose):
+        """The failure this restriction prevents is worse than the one it fixes: business
+        writing says "the P2 bug" constantly, and substituting inside a sentence would
+        rewrite it into somebody's address where nobody would think to look."""
+        assert self.typed(text=prose) == prose
+
+    def test_an_unminted_token_in_text_is_refused(self):
+        """A whole-value token that the vault never issued is the model inventing one."""
+        with pytest.raises(DispatchRejected):
+            self.typed(text="P99")

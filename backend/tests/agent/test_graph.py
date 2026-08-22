@@ -235,10 +235,13 @@ async def test_every_llm_node_writes_a_trajectory_row():
 
 async def test_the_run_always_ends_typed():
     """Every terminal state carries a code or an explicit success."""
+    # The router may say linear; a compose task cannot run there, so it is clamped to
+    # decision and the planner runs. See `topology_for`.
     llm = FakeLLMClient(
         [
             intake_reply("send_email", recipient_identity="P1", topic="demo"),
             ok("linear"),
+            ok("Open compose"),
             drafted(),
         ]
     )

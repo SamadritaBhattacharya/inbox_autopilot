@@ -218,7 +218,23 @@ COMPOSE_TOOLS: tuple[type[BaseModel], ...] = (
 #: label, send, or delete — so an injected instruction has nothing to reach for. The
 #: dispatcher would refuse a mutating verb anyway; binding it away means the model is never
 #: even tempted, and no prompt-level negotiation is possible.
-QUERY_TOOLS: tuple[type[BaseModel], ...] = (*PERCEPTION_TOOLS, Click, *CONTROL_TOOLS)
+QUERY_TOOLS: tuple[type[BaseModel], ...] = (
+    *PERCEPTION_TOOLS,
+    Click,
+    # Typing is NOT mutating, and excluding it was over-broad. "Search for the invoice
+    # thread" needs a search box filled and Enter pressed; without these the worker could
+    # click into the box and then sit there unable to enter a single character — a task it
+    # was explicitly routed to do, failing for want of a keystroke.
+    #
+    # The read-only guarantee is unaffected: it is "cannot change the mailbox", and these
+    # three change nothing on their own. Nothing that sends, archives, labels or deletes is
+    # reachable from here, and a Click on a Send button is refused at dispatch by
+    # consequence rather than by verb name — which is exactly why that gate is worth having.
+    Type,
+    Clear,
+    PressKey,
+    *CONTROL_TOOLS,
+)
 
 #: Calendar: read a thread, propose an event. **Read-only in v1.**
 #:

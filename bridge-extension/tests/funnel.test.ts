@@ -25,6 +25,7 @@ const meta = (overrides: Partial<PageMeta> = {}): PageMeta => ({
   threadRef: null,
   unreadCount: null,
   composeOpen: false,
+  focusBox: null,
   ...overrides,
 });
 

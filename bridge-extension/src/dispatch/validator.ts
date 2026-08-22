@@ -188,7 +188,7 @@ export class ActionValidator {
    */
   private resolveTokens(call: ActionCall): Record<string, string> {
     const resolved: Record<string, string> = {};
-    for (const arg of TOKEN_ARGS) {
+    for (const arg of tokenBearingArgs(call)) {
       const raw = call.args?.[arg];
       if (typeof raw !== "string" || !raw.trim()) continue;
 
@@ -227,6 +227,35 @@ export class ActionValidator {
     }
     return resolved;
   }
+}
+
+/**
+ * Which arguments to resolve on THIS call.
+ *
+ * The declared token fields always. Plus `text` — but **only when its entire value is a
+ * token**, and that restriction is the whole design.
+ *
+ * `Type(index=4, text="P1")` is how the model searches for a person, and leaving it literal
+ * types the characters "P1" into the search box. But `text` also carries email bodies, and
+ * prose says "the P2 bug" and "Q1 targets" all the time; substituting inside a sentence
+ * would rewrite one of those into somebody's address — a worse failure than the one being
+ * fixed, and one nobody would think to look for.
+ */
+export function tokenBearingArgs(call: ActionCall): string[] {
+  const args = [...TOKEN_ARGS].filter((arg) => call.args?.[arg] !== undefined);
+  const text = call.args?.text;
+  if (typeof text === "string" && text.trim() && isAllTokens(text)) args.push("text");
+  return args;
+}
+
+/** Is every comma-separated part of `value` a vault token, and nothing else? */
+export function isAllTokens(value: string): boolean {
+  const parts = splitTokens(value);
+  const whole = (part: string) => {
+    const match = new RegExp(TOKEN_RE.source, TOKEN_RE.flags).exec(part);
+    return match !== null && match[0] === part;
+  };
+  return parts.length > 0 && parts.every(whole);
 }
 
 /** Split a possibly multi-recipient field into individual tokens. */

@@ -97,6 +97,14 @@ class PageMeta:
     thread_ref: str | None = None
     unread_count: int | None = None
     compose_open: bool = False
+    #: The open dialog's box, when there is one: `(x, y, width, height)`, viewport-relative.
+    #:
+    #: Not for clicking — for PRIORITY. When a compose window is open, its fields are the
+    #: only things the agent can act on, and without this they compete for the token budget
+    #: against every inbox row behind them and lose. Observed live: the subject field was
+    #: trimmed away, and the agent spent five turns scrolling a page that never moves
+    #: looking for it.
+    focus_box: tuple[float, float, float, float] | None = None
 
 
 @dataclass

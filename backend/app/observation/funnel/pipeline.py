@@ -143,6 +143,9 @@ class ObservationFunnel:
             indexed,
             viewport_height=meta.viewport_height,
             previous_indices=previous_identities,
+            # When a dialog is open, its fields outrank the mailbox behind it. Without this
+            # the compose subject line loses a budget contest to two hundred inbox rows.
+            focus_box=meta.focus_box,
         )
         report.shown = len(listed)
 

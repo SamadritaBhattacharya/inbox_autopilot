@@ -20,7 +20,7 @@
  */
 import type { Observation } from "@inbox/contracts";
 
-import type { RawElement } from "./raw";
+import type { Box, RawElement } from "./raw";
 
 /** The wire contract's element, taken from the generated schema so the two cannot drift. */
 export type WireElement = Observation["elements"][number];
@@ -54,8 +54,31 @@ function clip(text: string): string {
   return collapsed.slice(0, MAX_TEXT_LENGTH - 1).trimEnd() + "…";
 }
 
-/** Lower is cut first. */
-function priority(element: RawElement, fold: number): number {
+/**
+ * Is this element's centre within the focused region?
+ *
+ * Centre rather than full containment: a wide field inside a narrow dialog still belongs to
+ * it, and requiring total overlap would exclude exactly the inputs that matter.
+ */
+function inside(element: RawElement, box: Box | null): boolean {
+  if (!box) return false;
+  const [x, y, width, height] = box;
+  const cx = element.x + element.width / 2;
+  const cy = element.y + element.height / 2;
+  return cx >= x && cx <= x + width && cy >= y && cy <= y + height;
+}
+
+/**
+ * Lower is cut first.
+ *
+ * **Anything inside an open dialog outranks everything else.** When a compose window is open
+ * its fields are the only things the agent can act on — but there are half a dozen of them
+ * against two hundred inbox rows behind, and the rows win on volume. The subject field was
+ * trimmed before the model saw it, and the agent scrolled a page that does not move looking
+ * for a field that was never in the list.
+ */
+function priority(element: RawElement, fold: number, focus: Box | null): number {
+  if (inside(element, focus)) return element.interactive ? 5 : 4;
   const aboveFold = element.y < fold;
   if (element.interactive) return aboveFold ? 3 : 2;
   return aboveFold ? 1 : 0;
@@ -70,6 +93,8 @@ export interface FormatOptions {
   viewportHeight: number;
   /** Last turn's identities (role + name), used only to mark what is NEW. */
   previousIdentities?: Set<string>;
+  /** The open dialog's box. Its contents outrank everything behind them. */
+  focusBox?: Box | null;
 }
 
 /** Serialises indexed elements to the wire contract, within budget. */
@@ -90,8 +115,9 @@ export class ReadingOrderFormatter {
 
     // Cut candidates by value, but emit in reading order: the model reads the list as a
     // picture of the page, so the order it arrives in has to match the page.
+    const focus = options.focusBox ?? null;
     const byValue = [...elements].sort((a, b) => {
-      const byPriority = priority(b, fold) - priority(a, fold);
+      const byPriority = priority(b, fold, focus) - priority(a, fold, focus);
       if (byPriority !== 0) return byPriority;
       // Within a band, keep the earlier index — Python sorts on `-index` descending, which
       // is the same ordering.

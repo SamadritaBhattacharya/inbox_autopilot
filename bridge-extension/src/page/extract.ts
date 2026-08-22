@@ -198,7 +198,10 @@ export const EXTRACT_JS = String.raw`
   const composeEl = document.querySelector(
     '[role="dialog"] [name="subjectbox"], [role="dialog"] [g_editable="true"], dialog[open]'
   );
-  const composeBox = composeEl ? composeEl.getBoundingClientRect() : null;
+  // The dialog's own box, not just whether it exists: the fields INSIDE it must not lose a
+  // budget contest to the inbox rows behind them.
+  const dialogEl = composeEl ? composeEl.closest('[role="dialog"], dialog') || composeEl : null;
+  const composeBox = dialogEl ? dialogEl.getBoundingClientRect() : null;
   const composeOpen = !!composeBox && composeBox.width > 0 && composeBox.height > 0;
 
   return {
@@ -211,6 +214,10 @@ export const EXTRACT_JS = String.raw`
       scrollX: Math.round(window.scrollX),
       scrollY: Math.round(window.scrollY),
       composeOpen,
+      focusBox: composeOpen
+        ? { x: composeBox.left, y: composeBox.top,
+            width: composeBox.width, height: composeBox.height }
+        : null,
     },
   };
 }
@@ -316,6 +323,14 @@ export function detectView(url: string, composeOpen: boolean): MailView {
   return "inbox";
 }
 
+function readBox(value: unknown): [number, number, number, number] | null {
+  if (!value || typeof value !== "object") return null;
+  const box = value as Record<string, unknown>;
+  const parts = [box.x, box.y, box.width, box.height];
+  if (!parts.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  return parts as [number, number, number, number];
+}
+
 export function parseMeta(
   raw: Record<string, unknown>,
   options: { threadRef?: string | null } = {},
@@ -333,5 +348,6 @@ export function parseMeta(
     threadRef: options.threadRef ?? null,
     unreadCount: null,
     composeOpen,
+    focusBox: readBox(raw.focusBox),
   };
 }

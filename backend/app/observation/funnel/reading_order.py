@@ -47,8 +47,35 @@ def _clip(text: str) -> str:
     return text[: MAX_TEXT_LENGTH - 1].rstrip() + "…"
 
 
-def _priority(element: RawElement, fold: float) -> int:
-    """Lower is cut first."""
+Box = tuple[float, float, float, float]
+
+
+def _inside(element: RawElement, box: Box | None) -> bool:
+    """Is this element's centre within the focused region?
+
+    Centre rather than full containment: a wide field inside a narrow dialog still belongs
+    to it, and requiring total overlap would exclude exactly the inputs that matter.
+    """
+    if box is None:
+        return False
+    x, y, width, height = box
+    cx = element.x + element.width / 2
+    cy = element.y + element.height / 2
+    return x <= cx <= x + width and y <= cy <= y + height
+
+
+def _priority(element: RawElement, fold: float, focus: Box | None = None) -> int:
+    """Lower is cut first.
+
+    **Anything inside an open dialog outranks everything else**, and that is the whole point
+    of the focus box. When a compose window is open its fields are the only things the agent
+    can act on — but there are half a dozen of them against two hundred inbox rows behind,
+    and the rows won on volume. The subject field was trimmed away before the model ever saw
+    it, and the agent spent five turns scrolling a page that does not move, looking for a
+    field that was never in the list.
+    """
+    if _inside(element, focus):
+        return 5 if element.interactive else 4
     above_fold = element.y < fold
     if element.interactive:
         return 3 if above_fold else 2
@@ -67,6 +94,7 @@ class ReadingOrderFormatter:
         *,
         viewport_height: int,
         previous_indices: set[str] | None = None,
+        focus_box: Box | None = None,
     ) -> tuple[list[Element], int]:
         """Returns `(elements, budget_dropped_count)`.
 
@@ -80,7 +108,9 @@ class ReadingOrderFormatter:
         # Cut candidates by value, but emit in reading order: the model reads the list as a
         # picture of the page, so the order it arrives in has to match the page.
         by_value = sorted(
-            elements, key=lambda e: (_priority(e, fold), -(e.index or 0)), reverse=True
+            elements,
+            key=lambda e: (_priority(e, fold, focus_box), -(e.index or 0)),
+            reverse=True,
         )
 
         kept: list[RawElement] = []

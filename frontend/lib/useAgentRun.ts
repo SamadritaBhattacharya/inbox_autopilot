@@ -73,6 +73,18 @@ export function useAgentRun(threadId: string, task?: string) {
       if (task && !startedRef.current) {
         startedRef.current = true;
         socket.send(JSON.stringify({ type: "start", task, threadId }));
+
+        // Take the task back out of the address bar once the run owns it.
+        //
+        // A task is frequently PII — "search arnabhsinha888@gmail.com" put a real address
+        // into browser history, into any bookmark, into the tab title, and onto the screen
+        // of anybody the user shares their window with. The backend tokenizes the task the
+        // moment it arrives, but the URL that carried it there is the user's to keep.
+        //
+        // Safe to strip: the run is addressed by `threadId` from here on, so a reload
+        // ATTACHES rather than restarting. That is the same property that makes a run URL
+        // shareable, now doing double duty.
+        window.history.replaceState(null, "", window.location.pathname);
       } else {
         socket.send(JSON.stringify({ type: "attach", threadId }));
       }

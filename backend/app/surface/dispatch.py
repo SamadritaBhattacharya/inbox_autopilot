@@ -165,6 +165,28 @@ class ActionValidator:
             "the recipient in another.",
         )
 
+    @staticmethod
+    def _token_bearing_args(call: ActionCall) -> list[str]:
+        """Which arguments to resolve on THIS call.
+
+        The declared token fields always. Plus `text` — but **only when its entire value is
+        a token**, and that restriction is the whole design.
+
+        `Type(index=4, text="P1")` is how the model searches for a person, and leaving it
+        literal typed the characters "P1" into Gmail's search box. But `text` also carries
+        email bodies, and prose says things like "the P2 bug" and "Q1 targets" all the time.
+        Substituting inside free text would rewrite those into somebody's address — a far
+        worse failure than the one being fixed, and one nobody would think to look for.
+
+        A whole-value match covers every case the model actually needs (a search box, a
+        recipient field) and cannot touch a sentence.
+        """
+        args = [arg for arg in TOKEN_ARGS if arg in call.args]
+        text = call.args.get("text")
+        if isinstance(text, str) and text.strip() and _is_all_tokens(text):
+            args.append("text")
+        return args
+
     def _resolve_index(self, call: ActionCall) -> tuple[float, float] | None:
         for arg in INDEX_ARGS:
             if arg not in call.args:
@@ -184,7 +206,7 @@ class ActionValidator:
     def _resolve_tokens(self, call: ActionCall) -> dict[str, str]:
         """Resolve token arguments to real values, at the last possible moment."""
         resolved: dict[str, str] = {}
-        for arg in TOKEN_ARGS:
+        for arg in self._token_bearing_args(call):
             value = call.args.get(arg)
             if not isinstance(value, str) or not value.strip():
                 continue
@@ -217,6 +239,12 @@ class ActionValidator:
                     )
                 resolved[token] = real
         return resolved
+
+
+def _is_all_tokens(value: str) -> bool:
+    """Is every comma-separated part of `value` a vault token, and nothing else?"""
+    parts = _split_tokens(value)
+    return bool(parts) and all(TOKEN_RE.fullmatch(part) for part in parts)
 
 
 def _split_tokens(value: str) -> list[str]:

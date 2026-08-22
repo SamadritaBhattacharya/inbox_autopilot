@@ -35,7 +35,12 @@ from app.observation.funnel.reading_order import identity_set
 from app.security.tokenizer import PiiTokenizer
 from app.security.vault import SessionPiiVault
 from app.surface.base import SurfaceUnavailable
-from app.surface.dispatch import ActionValidator, DispatchRejected, ResolvedAction
+from app.surface.dispatch import (
+    ActionValidator,
+    DispatchRejected,
+    ResolvedAction,
+    _is_all_tokens,
+)
 from app.surface.extract import EXTRACT_JS, MAX_NODES, parse_elements, parse_meta
 from app.workers.irreversible import is_irreversible
 
@@ -462,13 +467,21 @@ class PlaywrightEmailSurface:
         This is the ONLY moment a real address exists outside the vault, and it exists for
         exactly as long as it takes to reach the keyboard.
         """
-        text = str(action.call.args.get("text") or "")
-        recipient = str(action.call.args.get("recipient") or "")
-        if recipient and action.resolved_args:
-            for token, real in action.resolved_args.items():
-                recipient = recipient.replace(token, real)
-            return recipient
-        return text
+        resolved = action.resolved_args or {}
+        for arg in ("recipient", "cc", "bcc", "text"):
+            raw = str(action.call.args.get(arg) or "")
+            if not raw:
+                continue
+            # Prose goes in verbatim. `text` carries email bodies, and business writing says
+            # "the P2 bug" and "Q1 targets" constantly — substituting inside a sentence would
+            # rewrite one of those into somebody's address, which is a worse failure than the
+            # one this method exists to fix and one nobody would think to look for.
+            if arg == "text" and not _is_all_tokens(raw):
+                return raw
+            for token, real in resolved.items():
+                raw = raw.replace(token, real)
+            return raw
+        return ""
 
     # ── settling ────────────────────────────────────────────────────────────
 

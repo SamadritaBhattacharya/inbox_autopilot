@@ -12,7 +12,7 @@
 import type { ActionCall, ActionResult } from "@inbox/contracts";
 
 import type { CdpSession } from "./cdp";
-import type { ResolvedAction } from "../dispatch/validator";
+import { isAllTokens, type ResolvedAction } from "../dispatch/validator";
 
 /** Per-verb timeout walls. A breach is `ACTION_TIMEOUT` — a typed failure, not a crash. */
 export const TIMEOUTS: Record<string, number> = {
@@ -74,9 +74,19 @@ const failed = (reason: string, errorCode: string | null = null): ActionResult =
  * real address in the box, not the string "P1".
  */
 function textFor(action: ResolvedAction): string {
-  const resolved = action.resolvedArgs.recipient ?? action.resolvedArgs.cc ?? action.resolvedArgs.bcc;
-  if (resolved) return resolved;
-  return String(action.call.args?.text ?? "");
+  for (const arg of ["recipient", "cc", "bcc", "text"] as const) {
+    const raw = String(action.call.args?.[arg] ?? "");
+    if (!raw) continue;
+    // Prose goes in verbatim; only a whole-token value is substituted. See
+    // `tokenBearingArgs` for why a sentence must never be rewritten.
+    if (arg === "text" && !isAllTokens(raw)) return raw;
+    let out = raw;
+    for (const [token, real] of Object.entries(action.resolvedArgs)) {
+      out = out.split(token).join(real);
+    }
+    return out;
+  }
+  return "";
 }
 
 export class ActionDriver {

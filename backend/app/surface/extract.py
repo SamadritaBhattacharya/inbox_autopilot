@@ -203,7 +203,11 @@ EXTRACT_JS = """
   const composeEl = document.querySelector(
     '[role="dialog"] [name="subjectbox"], [role="dialog"] [g_editable="true"], dialog[open]'
   );
-  const composeBox = composeEl ? composeEl.getBoundingClientRect() : null;
+  // The dialog's own box, not just whether it exists. When something is open, the fields
+  // INSIDE it are the only ones the agent can act on — and they must not lose a budget
+  // contest to two hundred inbox rows behind them.
+  const dialogEl = composeEl ? composeEl.closest('[role="dialog"], dialog') || composeEl : null;
+  const composeBox = dialogEl ? dialogEl.getBoundingClientRect() : null;
   const composeOpen = !!composeBox && composeBox.width > 0 && composeBox.height > 0;
 
   return {
@@ -216,6 +220,10 @@ EXTRACT_JS = """
       scrollX: Math.round(window.scrollX),
       scrollY: Math.round(window.scrollY),
       composeOpen,
+      focusBox: composeOpen
+        ? { x: composeBox.left, y: composeBox.top,
+            width: composeBox.width, height: composeBox.height }
+        : null,
     },
   };
 }
@@ -288,6 +296,15 @@ def detect_view(url: str, compose_open: bool) -> str:
 def parse_meta(raw: dict[str, Any], *, thread_ref: str | None = None) -> PageMeta:
     url = str(raw.get("contextRef") or "")
     compose_open = bool(raw.get("composeOpen"))
+    box = raw.get("focusBox")
+    focus_box = None
+    if isinstance(box, dict):
+        try:
+            focus_box = (
+                float(box["x"]), float(box["y"]), float(box["width"]), float(box["height"])
+            )
+        except (KeyError, TypeError, ValueError):
+            focus_box = None
     return PageMeta(
         context_ref=url,
         title=str(raw.get("title") or ""),
@@ -298,4 +315,5 @@ def parse_meta(raw: dict[str, Any], *, thread_ref: str | None = None) -> PageMet
         view=detect_view(url, compose_open),  # type: ignore[arg-type]
         thread_ref=thread_ref,
         compose_open=compose_open,
+        focus_box=focus_box,
     )

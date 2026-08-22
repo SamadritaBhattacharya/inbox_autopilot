@@ -31,7 +31,7 @@ from app.rules.store import RulesStore
 from app.security.patterns import find_emails
 from app.security.vault import SessionPiiVault
 from app.telemetry.records import ErrorCode, StepRecord
-from app.workers.registry import worker_for
+from app.workers.registry import topology_for, worker_for
 
 logger = logging.getLogger(__name__)
 
@@ -305,12 +305,18 @@ def build_router_node(llm: LLMClient, rules: RulesStore, emitter: EventEmitter |
 
         matched = rules.match(state.task, intent.action.value)
         if matched is not None:
-            logger.info("router: rule %r matched — linear, no classifier call", matched.name)
+            # Even a rule match is clamped: a rule that fires on a compose task would send
+            # it down a path with no perception loop, which is the same failure by a
+            # different route.
+            topology = topology_for(intent.action, "linear")
+            logger.info(
+                "router: rule %r matched — %s, no classifier call", matched.name, topology
+            )
             if emitter is not None:
-                await emitter.route("linear", f"matched rule {matched.name!r}", True)
+                await emitter.route(topology, f"matched rule {matched.name!r}", True)
             return {
                 "route": Route(
-                    topology="linear",
+                    topology=topology,
                     why=f"matched rule {matched.name!r}",
                     rule_matched=True,
                 ),
@@ -325,7 +331,20 @@ def build_router_node(llm: LLMClient, rules: RulesStore, emitter: EventEmitter |
             ],
         )
         answer = (result.text or result.reasoning).strip().lower()
-        topology = "linear" if answer.startswith("linear") else "decision"
+        asked = "linear" if answer.startswith("linear") else "decision"
+
+        # The classifier's answer is a suggestion; what the worker can actually do is a
+        # fact. It called "write a good evening mail to P1" linear, and a compose task on
+        # the linear path has no way to find a Compose button — the run died as NO_ACTION
+        # and blamed the model.
+        topology = topology_for(intent.action, asked)
+        if topology != asked:
+            logger.info(
+                "router: classifier said %s, but %s cannot run linearly — using %s",
+                asked,
+                intent.action.value,
+                topology,
+            )
 
         if emitter is not None:
             await emitter.route(topology, f"classifier said {answer[:40]!r}", False)

@@ -14,8 +14,8 @@ from app.agent.graph import build_manager_graph
 from app.manager.intent import READ_ONLY_ACTIONS, Action, TaskIntent
 from app.manager.slots import REQUIRED_SLOTS, apply_defaults, is_ready, missing_slots
 from app.rules.store import NoRules
-from app.workers.registry import QUERY, WORKER_FOR_ACTION, worker_for
-from app.workers.tools import QUERY_TOOLS, verb_names
+from app.workers.registry import QUERY, WORKER_FOR_ACTION, topology_for, worker_for
+from app.workers.tools import QUERY_TOOLS, TOOLSETS, verb_names
 from tests.fakes.fake_llm import FakeLLMClient, ok
 
 MUTATING_VERBS = {"Archive", "MarkRead", "Label", "Snooze", "Send", "DeleteForever", "DraftReply"}
@@ -168,3 +168,123 @@ async def test_a_mutating_request_still_gets_the_full_bar():
     )
 
     assert "__interrupt__" in result
+
+
+# ── the router cannot send a task somewhere it cannot run ───────────────────
+
+
+class TestTopologyIsClamped:
+    """Observed live: the router called "write a good evening mail to P1" *linear*.
+
+    The linear path is the deterministic rules worker — no observe step, no perception at
+    all. A compose task there has no way to find a Compose button, so it produced nothing
+    and the run died as `NO_ACTION`, reported to the user as "the model stopped choosing
+    actions". A routing mistake, blamed on the model.
+
+    Whether a worker can run blind is a fact about the worker, so it is decided by the
+    worker and not by a classifier's judgement.
+    """
+
+    @pytest.mark.parametrize(
+        "action", [Action.SEND_EMAIL, Action.REPLY, Action.FORWARD, Action.EXTRACT_EVENT]
+    )
+    def test_writing_actions_are_forced_onto_the_decision_path(self, action):
+        assert topology_for(action, "linear") == "decision"
+
+    @pytest.mark.parametrize("action", sorted(READ_ONLY_ACTIONS, key=lambda a: a.value))
+    def test_reading_actions_are_forced_onto_the_decision_path(self, action):
+        """Answering a question about a mailbox needs to SEE the mailbox."""
+        assert topology_for(action, "linear") == "decision"
+
+    @pytest.mark.parametrize(
+        "action", [Action.TRIAGE, Action.ARCHIVE, Action.LABEL, Action.SNOOZE, Action.APPLY_RULES]
+    )
+    def test_rule_shaped_actions_may_still_run_linearly(self, action):
+        """The clamp must stay narrow: "archive all newsletters" genuinely needs no screen,
+        and forcing it through the loop would spend model calls for nothing."""
+        assert topology_for(action, "linear") == "linear"
+
+    @pytest.mark.parametrize(
+        "action", [Action.SEND_EMAIL, Action.TRIAGE, Action.SUMMARIZE]
+    )
+    def test_decision_is_never_downgraded(self, action):
+        """The clamp only ever moves work TOWARDS more perception, never away from it."""
+        assert topology_for(action, "decision") == "decision"
+
+
+async def test_a_rule_match_cannot_drag_a_compose_task_onto_the_linear_path():
+    """The same failure by a different route: a rule that fires on a compose task would
+    send it somewhere with no perception loop."""
+    from app.agent.graph import build_manager_graph
+    from app.rules.store import InMemoryRulesStore
+
+    llm = FakeLLMClient(
+        [
+            intake_reply("send_email", recipient_identity="P1", topic="the demo"),
+            # The classifier is asked only when no rule matched; scripted either way so the
+            # test asserts the CLAMP rather than which path reached it.
+            ok("linear"),
+            ok("Open compose"),
+            ok('{"subject": "s", "body": "b", "tone": "warm"}'),
+        ]
+    )
+    graph = build_manager_graph(llm=llm, rules=InMemoryRulesStore())
+
+    final = await graph.ainvoke(
+        {"task": "archive all the newsletters and email P1", "thread_id": "clamp-1"},
+        {"configurable": {"thread_id": "clamp-1"}},
+    )
+
+    assert final["route"].topology == "decision"
+
+
+# ── a read-only worker can still work a search box ─────────────────────────
+
+
+class TestQueryCanNavigateAndSearch:
+    """"Search for the invoice thread" needs a box filled and Enter pressed.
+
+    `Type` was excluded from the read-only toolset along with the genuinely mutating verbs,
+    which meant the query worker could click into a search box and then sit there unable to
+    enter a character — failing a task it had been routed to do, for want of a keystroke.
+    Typing changes nothing on its own; the read-only guarantee is about the MAILBOX.
+    """
+
+    def test_it_can_fill_a_search_box_and_submit(self):
+        verbs = verb_names(QUERY_TOOLS)
+
+        assert {"Click", "Type", "PressKey", "Clear"} <= verbs
+
+    def test_it_still_cannot_change_the_mailbox(self):
+        """The capability half of the read-only guarantee, unchanged: an injected
+        instruction has nothing to reach for."""
+        assert verb_names(QUERY_TOOLS) & MUTATING_VERBS == set()
+
+    def test_it_can_reach_a_folder_by_clicking(self):
+        """"Open the sent folder" is a click on a sidebar link, not a URL navigation. There
+        is deliberately NO Navigate verb anywhere: an agent that can be talked into loading
+        an arbitrary URL is a far larger hole than one that can only press what is on
+        screen."""
+        every_verb: set[str] = set()
+        for tools in TOOLSETS.values():
+            every_verb |= verb_names(tools)
+
+        assert "Navigate" not in every_verb
+
+    def test_a_click_on_send_is_still_refused_here(self):
+        """Defence in depth. The query worker has Click, so it *could* press a Send button
+        — and the dispatcher refuses it by CONSEQUENCE rather than by verb name."""
+        from inbox_contracts import ActionCall
+
+        from app.workers.irreversible import is_irreversible
+
+        observation = observation_with_send()
+        assert is_irreversible(ActionCall(name="Click", args={"index": 9}), observation)
+
+
+def observation_with_send():
+    from inbox_contracts import Element
+
+    from tests.fakes.fake_surface import observation
+
+    return observation(Element(index=9, role="button", name="Send (Ctrl-Enter)"))

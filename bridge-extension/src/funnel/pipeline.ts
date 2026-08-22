@@ -143,6 +143,8 @@ export class ObservationFunnel {
     const formatted = this.formatter.apply(indexed, {
       viewportHeight: meta.viewportHeight,
       ...(options.previousIdentities ? { previousIdentities: options.previousIdentities } : {}),
+      // When a dialog is open, its fields outrank the mailbox behind it.
+      focusBox: meta.focusBox,
     });
     report.budgetDropped = formatted.budgetDropped;
     report.shown = formatted.elements.length;

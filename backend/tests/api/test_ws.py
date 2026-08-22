@@ -68,9 +68,11 @@ def collect(socket, *, until: str, limit: int = 60) -> list[dict]:
 
 
 def test_a_run_streams_to_completion(wired):
+    # `summarize` cannot run linearly — reading a mailbox needs a screen — so the router
+    # clamps it to decision and a planner call follows. See `topology_for`.
     wired(
         FakeLLMClient(
-            [intake("summarize", scope="inbox"), ok("linear")]
+            [intake("summarize", scope="inbox"), ok("linear"), ok("Read the inbox")]
         )
     )
     with TestClient(app).websocket_connect("/ws/run") as socket:
@@ -112,7 +114,8 @@ def test_answering_resumes_the_run(wired):
         FakeLLMClient(
             [
                 intake("send_email", recipient_identity="P1"),
-                ok("linear"),
+                ok("linear"),  # clamped to decision: composing needs a screen
+                ok("Open compose"),
                 drafted(),
             ]
         )

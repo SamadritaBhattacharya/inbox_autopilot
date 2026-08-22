@@ -37,6 +37,15 @@ class WorkerSpec:
     #: Rough per-run step ceiling. Reading a thread is short; triaging a backlog is not.
     max_steps: int
     purpose: str
+    #: May this worker run on the LINEAR path — the deterministic rules worker, with no
+    #: perception loop at all?
+    #:
+    #: A property of the worker, not a guess the router gets to make. Composing an email
+    #: needs to see a screen: find Compose, find the To box, find Send. The linear path has
+    #: no observe step, so a compose task routed there produces nothing and reports "the
+    #: model stopped choosing actions" — which reads as a model failure and is a routing
+    #: one. Observed live, on a plain "write an evening mail" request.
+    supports_linear: bool = False
 
     @property
     def verbs(self) -> frozenset[str]:
@@ -53,6 +62,9 @@ QUERY = WorkerSpec(
 
 TRIAGE = WorkerSpec(
     name="triage",
+    # Rules genuinely can archive and label without looking: the selector is the whole
+    # instruction, and "archive all newsletters" needs no screen to decide anything.
+    supports_linear=True,
     tools=TRIAGE_TOOLS,
     read_only=False,
     max_steps=40,
@@ -95,6 +107,22 @@ WORKER_FOR_ACTION: dict[Action, WorkerSpec] = {
 WORKERS: dict[str, WorkerSpec] = {
     spec.name: spec for spec in (QUERY, TRIAGE, COMPOSE, CALENDAR)
 }
+
+
+def topology_for(action: Action, requested: str) -> str:
+    """The topology this action can actually run under.
+
+    The router is a model call and gets this wrong sometimes — it called "write a good
+    evening mail to P1" linear, which sent a compose task down the rules path, where there
+    is no perception loop and therefore no way to find a Compose button. The run failed as
+    `NO_ACTION`, blaming the model for a decision the router made.
+
+    Clamping here rather than arguing with the prompt: whether a worker can run blind is a
+    fact about the worker, and a fact does not belong in a classifier's judgement.
+    """
+    if requested != "linear":
+        return requested
+    return "linear" if worker_for(action).supports_linear else "decision"
 
 
 def worker_for(action: Action) -> WorkerSpec:

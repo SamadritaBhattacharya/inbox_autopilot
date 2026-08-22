@@ -103,3 +103,73 @@ def test_the_injection_case_still_carries_its_bait():
     raw = json.dumps(load("cases", "injection"))
 
     assert "attacker@evil.com" in raw
+
+
+# ── an open dialog outranks the mailbox behind it ──────────────────────────
+
+
+def test_a_compose_dialog_keeps_all_its_fields():
+    """Observed live, and it cost five wasted turns.
+
+    A compose window has half a dozen fields; the inbox behind it has two hundred rows. On
+    volume alone the rows won the token budget and the SUBJECT field was trimmed before the
+    model ever saw it. The agent then scrolled looking for it — but compose is a dialog, so
+    scrolling the page changes nothing, and the observation came back byte-identical every
+    turn until the stuck guard killed the run.
+    """
+    from app.observation.funnel.reading_order import ReadingOrderFormatter
+
+    rows = [
+        RawElement(
+            node_id=i,
+            role="listitem",
+            name=f"Inbox row {i} with a fairly long subject line to eat the budget",
+            x=0.0,
+            y=float(100 + i * 12),
+            width=800.0,
+            height=38.0,
+            interactive=True,
+            index=i,
+        )
+        for i in range(1, 141)
+    ]
+    fields = [
+        RawElement(node_id=900 + n, role=role, name=name, x=820.0, y=y, width=300.0,
+                   height=24.0, interactive=True, index=900 + n)
+        for n, (role, name, y) in enumerate(
+            [
+                ("textbox", "To", 500.0),
+                ("textbox", "Subject", 540.0),
+                ("textbox", "Message Body", 580.0),
+                ("button", "Send", 720.0),
+            ]
+        )
+    ]
+    focus = (810.0, 480.0, 340.0, 300.0)
+
+    listed, _ = ReadingOrderFormatter(token_budget=300).apply(
+        rows + fields, viewport_height=800, focus_box=focus
+    )
+    shown = {element.name for element in listed}
+
+    assert {"To", "Subject", "Message Body", "Send"} <= shown
+
+
+def test_without_a_focus_box_the_rows_still_win():
+    """The counterfactual, so the fix above cannot be quietly reverted and still pass."""
+    from app.observation.funnel.reading_order import ReadingOrderFormatter
+
+    rows = [
+        RawElement(node_id=i, role="listitem", name=f"Inbox row {i} with a long subject",
+                   x=0.0, y=float(100 + i * 12), width=800.0, height=38.0,
+                   interactive=True, index=i)
+        for i in range(1, 141)
+    ]
+    subject = RawElement(node_id=901, role="textbox", name="Subject", x=820.0, y=540.0,
+                         width=300.0, height=24.0, interactive=True, index=901)
+
+    listed, _ = ReadingOrderFormatter(token_budget=300).apply(
+        [*rows, subject], viewport_height=800, focus_box=None
+    )
+
+    assert "Subject" not in {element.name for element in listed}
