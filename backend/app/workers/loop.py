@@ -488,7 +488,7 @@ def build_act_node(
                     worker=state.active_worker,
                     action=call.name,
                     success=result.success,
-                    error_code=None,
+                    error_code=result.error_code,
                     undo=result.undo,
                 )
             ],

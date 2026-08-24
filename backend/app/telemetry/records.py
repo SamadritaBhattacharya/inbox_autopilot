@@ -80,7 +80,17 @@ class StepRecord(BaseModel):
 
     action: str | None = None
     success: bool | None = None
-    error_code: ErrorCode | None = None
+    #: `str`, not `ErrorCode` — this row carries TWO different vocabularies depending on
+    #: which node wrote it. A terminal step (`finalize`, `diagnose`) writes a member of
+    #: `ErrorCode`, the run-termination codes in CLAUDE.md §11. An `act` or `linear` step
+    #: writes a dispatch-rejection code instead (`STALE_INDEX`, `UNKNOWN_TOKEN`,
+    #: `APPROVAL_REQUIRED`, …) — see `app.surface.dispatch` — which is a wider, per-action
+    #: vocabulary that is not and should not be a member of `ErrorCode`. Typing this field
+    #: as `ErrorCode` made recording an action's real code a `ValidationError`, which is why
+    #: the act node silently wrote `None` here instead of `result.error_code`: every
+    #: hallucinated referent the dispatcher caught was refused correctly and told to the
+    #: model, then its typed reason was thrown away before it ever reached the trajectory.
+    error_code: str | None = None
 
     # LLM metering — populated on reason/intake/router/verify steps, absent elsewhere.
     provider: str | None = None

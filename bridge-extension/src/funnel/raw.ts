@@ -78,6 +78,16 @@ export interface PageMeta {
   unreadCount: number | null;
   composeOpen: boolean;
   /**
+   * Which compose fields already hold content. Booleans only — the content itself is
+   * precisely what must not reach the model in the clear.
+   *
+   * A committed recipient becomes a chip, a separate node, so the input reads empty and the
+   * agent types the address a second time on top of the first.
+   */
+  toFilled: boolean;
+  subjectFilled: boolean;
+  bodyFilled: boolean;
+  /**
    * The open dialog's box, when there is one. Viewport-relative.
    *
    * Not for clicking — for PRIORITY. When a compose window is open its fields are the only

@@ -66,6 +66,10 @@ def meta(**overrides) -> dict:
         "threadRef": None,
         "unreadCount": 12,
         "composeOpen": False,
+        "toFilled": False,
+        "subjectFilled": False,
+        "bodyFilled": False,
+        "focusBox": None,
     }
     base.update(overrides)
     return base
@@ -240,6 +244,9 @@ def run_case(case: dict) -> dict:
         thread_ref=m["threadRef"],
         unread_count=m["unreadCount"],
         compose_open=m["composeOpen"],
+        to_filled=m.get("toFilled", False),
+        subject_filled=m.get("subjectFilled", False),
+        body_filled=m.get("bodyFilled", False),
     )
 
     observation, _geometry, _report = funnel.run(elements, page)

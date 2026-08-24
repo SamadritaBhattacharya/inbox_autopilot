@@ -64,6 +64,19 @@ def observation_block(state: AgentState) -> str:
             lines.append(
                 "A COMPOSE WINDOW IS ALREADY OPEN. Write in it. Do not click Compose again."
             )
+            # What is already done, so it stops guessing. A committed recipient becomes a
+            # chip and the input reads empty, so the agent typed the address a second time
+            # on top of the first — visible in the compose window as a chip AND loose text.
+            done = [
+                f"To: {'FILLED' if observation.mail.to_filled else 'empty'}",
+                f"Subject: {'FILLED' if observation.mail.subject_filled else 'empty'}",
+                f"Body: {'FILLED' if observation.mail.body_filled else 'empty'}",
+            ]
+            lines.append("  " + " · ".join(done))
+            lines.append(
+                "  Fill only the empty ones. A FILLED field is done — typing into it again "
+                "adds a SECOND copy."
+            )
     if observation.changed:
         lines.append(f"changed: {observation.changed}")
 

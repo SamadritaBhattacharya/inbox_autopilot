@@ -132,6 +132,7 @@ def build_linear_node(surface: EmailSurface, emitter: EventEmitter, rules: Rules
                         worker="rules",
                         action=verb,
                         success=result.success,
+                        error_code=result.error_code,
                         undo=result.undo,
                     )
                 )

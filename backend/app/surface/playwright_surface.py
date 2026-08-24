@@ -402,6 +402,8 @@ class PlaywrightEmailSurface:
             x, y = action.point
             await self._page.mouse.click(x, y)
 
+        recipient_field = _is_recipient_arg(action)
+
         if len(text) > TYPE_KEYSTROKE_LIMIT:
             # One CDP round trip instead of three per character. `Input.insertText` is a
             # real CDP input event — the page sees a trusted `beforeinput`/`input`, which is
@@ -411,6 +413,19 @@ class PlaywrightEmailSurface:
             await self._insert_text(text)
         else:
             await self._page.keyboard.type(text, delay=12)
+        if recipient_field:
+            # Commit the address into a chip.
+            #
+            # Gmail's To field is an autocomplete: typing leaves loose text with a suggestion
+            # dropdown hanging open over the compose window, and NOTHING is committed until
+            # Enter. Two things go wrong if we skip it — the address may never be attached to
+            # the draft at all, and the open dropdown covers the subject and body, so the very
+            # next observation cannot see the fields the agent needs next. It then hunts for a
+            # subject line that is sitting underneath a suggestion list.
+            #
+            # Enter also accepts the highlighted suggestion, which is what a human does.
+            await self._page.keyboard.press("Enter")
+
         # NEVER log `text` — a recipient resolved from a token is raw PII by this point.
         return ActionResult(success=True, reason=f"typed {len(text)} characters")
 
@@ -460,6 +475,10 @@ class PlaywrightEmailSurface:
             return ActionResult(success=False, reason="Navigate needs a url")
         await self._page.goto(url, wait_until="domcontentloaded")
         return ActionResult(success=True, reason="navigated")
+
+    @staticmethod
+    def _is_recipient_arg(action: ResolvedAction) -> bool:
+        return _is_recipient_arg(action)
 
     def _text_for(self, action: ResolvedAction) -> str:
         """The literal text to type, with tokens swapped for real values.
@@ -593,21 +612,39 @@ async def connect_surface(
     # Reuse the signed-in profile's context. A fresh context would have no cookies, which
     # is the entire thing we came here for.
     context = browser.contexts[0] if browser.contexts else await browser.new_context()
-    page = await context.new_page()
+
+    # Reuse a Gmail tab the user already has open, rather than always opening our own.
+    #
+    # Opening a fresh tab meant cold-booting Gmail on **every run** — measured at 37 seconds
+    # before the agent could take a single action, during which the cockpit showed nothing
+    # and the run looked hung. It also meant the agent worked in a tab the human was not
+    # looking at, which is its own quiet problem.
+    page = _existing_mail_tab(context, start_url)
+    ours = page is None
+    if page is None:
+        page = await context.new_page()
+        if start_url:
+            await page.goto(start_url, wait_until="domcontentloaded")
 
     surface = PlaywrightEmailSurface(page, **surface_kwargs)
-    if start_url:
-        await page.goto(start_url, wait_until="domcontentloaded")
+
     # After navigating, never before: `navigator.userAgentData` is undefined on about:blank,
     # so checking too early silently reports nothing and the warning never fires.
     await _warn_if_google_will_reject(page)
 
+    # `domcontentloaded` fires long before Gmail has rendered anything — the first
+    # observation came back with FOUR elements on a real inbox, and the agent then reasoned
+    # about a mailbox that had not drawn yet.
+    await _wait_until_ready(page)
+
     async def close() -> None:
         await surface.stop_screencast()
-        # Our tab only. `browser.close()` on a CDP connection disconnects rather than
-        # quitting their Chrome, but the tab is ours to clean up.
-        with contextlib.suppress(Exception):
-            await page.close()
+        # Only a tab we opened. Closing the human's own Gmail tab because a run finished
+        # would be its own kind of bug — and on the reuse path that is exactly what this
+        # would do.
+        if ours:
+            with contextlib.suppress(Exception):
+                await page.close()
         with contextlib.suppress(Exception):
             await browser.close()
         await manager.stop()
@@ -679,6 +716,88 @@ async def _ensure_browser(
             f"at {data_dir}; close any window using it (check the system tray) and try "
             "again."
         )
+
+
+#: Fields whose value is an ADDRESS and which need committing rather than merely filling.
+RECIPIENT_ARGS = ("recipient", "cc", "bcc")
+
+
+def _is_recipient_arg(action: ResolvedAction) -> bool:
+    """Does this `Type` need an Enter after it to take effect?
+
+    True for the address arguments, and equally for a `text` value that is nothing but a
+    token — because that is a person being entered into a field, whichever field it is. In a
+    To box Enter builds the chip; in the search box Enter runs the search. Both are what a
+    human does next, and neither is what happens if we stop at typing.
+
+    Decided from the ARGUMENT the model used, never the element's name: a name is page text
+    and therefore untrusted, and "To" is localised.
+    """
+    if any(str(action.call.args.get(arg) or "").strip() for arg in RECIPIENT_ARGS):
+        return True
+    text = str(action.call.args.get("text") or "")
+    return bool(text.strip()) and _is_all_tokens(text)
+
+
+#: How long to wait for a mail UI to actually draw. Generous, because a cold Gmail on a
+#: slow connection genuinely takes this long — and returning early is worse than waiting:
+#: the agent burns a turn reasoning about a blank page.
+READY_TIMEOUT_SECONDS = 25.0
+
+#: What "rendered" looks like. Any one of these means the app has drawn something the agent
+#: could act on. Deliberately several: Gmail's markup changes, and a selector that silently
+#: stops matching would reintroduce the empty-page bug with no signal.
+READY_SELECTORS = (
+    "div[gh='cm']",  # Compose
+    "table[role='grid'] tr",  # a mail row
+    "div[role='main']",
+    "input[name='identifier']",  # the sign-in wall counts as ready: the loop names it
+)
+
+
+async def _wait_until_ready(page: Any) -> None:
+    """Wait until the mail app has drawn, or give up and let the funnel report what it sees.
+
+    Giving up is not a failure: the loop handles a thin observation perfectly well, and
+    raising here would turn a slow network into a dead run.
+    """
+    import asyncio as _asyncio
+
+    deadline = _asyncio.get_running_loop().time() + READY_TIMEOUT_SECONDS
+    while _asyncio.get_running_loop().time() < deadline:
+        with contextlib.suppress(Exception):
+            for selector in READY_SELECTORS:
+                if await page.query_selector(selector) is not None:
+                    logger.info("mail UI ready (%s)", selector)
+                    return
+        await _asyncio.sleep(0.25)
+    logger.warning(
+        "the mail UI did not finish rendering within %.0fs; observing whatever is there",
+        READY_TIMEOUT_SECONDS,
+    )
+
+
+def _existing_mail_tab(context: Any, start_url: str | None) -> Any | None:
+    """A tab already showing the mail app, if the user has one open.
+
+    Matched on host rather than the full URL: the user is on `#inbox`, `#sent`, or a thread,
+    and demanding an exact match would reject every tab that is genuinely already there.
+    """
+    if not start_url:
+        return None
+    from urllib.parse import urlparse
+
+    host = urlparse(start_url).hostname or ""
+    if not host:
+        return None
+    for page in getattr(context, "pages", []):
+        with contextlib.suppress(Exception):
+            if page.is_closed():
+                continue
+            if urlparse(page.url).hostname == host:
+                logger.info("reusing the Gmail tab already open at %s", host)
+                return page
+    return None
 
 
 async def _warn_if_google_will_reject(page: Any) -> None:

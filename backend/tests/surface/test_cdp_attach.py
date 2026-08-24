@@ -104,3 +104,4 @@ async def test_a_missing_browser_is_explained_not_dumped():
     message = str(exc.value)
     assert "scripts/chrome.py serve" in message
     assert "CDP_AUTO_LAUNCH" in message
+

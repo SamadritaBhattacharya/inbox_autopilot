@@ -59,6 +59,10 @@
     "view": "thread",
     "threadRef": "thread-f:1837482910",
     "unreadCount": 12,
-    "composeOpen": false
+    "composeOpen": false,
+    "toFilled": false,
+    "subjectFilled": false,
+    "bodyFilled": false,
+    "focusBox": null
   }
 }

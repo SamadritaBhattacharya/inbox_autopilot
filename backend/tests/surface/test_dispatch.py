@@ -311,3 +311,52 @@ class TestWholeTokenTextIsResolved:
         """A whole-value token that the vault never issued is the model inventing one."""
         with pytest.raises(DispatchRejected):
             self.typed(text="P99")
+
+
+# ── an address is not entered until it is committed ────────────────────────
+
+
+class TestRecipientIsCommitted:
+    """Gmail's To field is an autocomplete. Typing leaves loose text with a suggestion
+    dropdown hanging open over the compose window, and nothing attaches to the draft until
+    Enter.
+
+    Skipping it broke two things at once: the address might never reach the draft, and the
+    open dropdown covered the subject and body — so the next observation could not see the
+    fields the agent needed, and it went hunting for a subject line that was underneath a
+    suggestion list.
+    """
+
+    def setup_method(self):
+        self.vault = SessionPiiVault()
+        self.token = self.vault.trust("arnabhsinha888@gmail.com")
+
+    def commits(self, **args) -> bool:
+        from app.surface.playwright_surface import _is_recipient_arg
+
+        resolved = ActionValidator(
+            vault=self.vault, geometry={1: (1.0, 2.0)}, bound_verbs={"Type"}
+        ).validate(ActionCall(name="Type", args={"index": 1, **args}))
+        return _is_recipient_arg(resolved)
+
+    @pytest.mark.parametrize("arg", ["recipient", "cc", "bcc"])
+    def test_an_address_field_is_committed(self, arg):
+        assert self.commits(**{arg: self.token}) is True
+
+    def test_a_bare_token_in_text_is_committed_too(self):
+        """Whichever field it lands in, a whole-value token is a person being entered. In a
+        To box Enter builds the chip; in the search box Enter runs the search."""
+        assert self.commits(text=self.token) is True
+
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            "Evening Motivation",
+            "Good evening. Hope the week is going well.",
+            "the P2 bug is blocking Q1",
+        ],
+    )
+    def test_a_subject_or_body_is_never_committed(self, prose):
+        """Enter in a body inserts a newline; Enter in a subject can submit the draft. This
+        must stay narrow."""
+        assert self.commits(text=prose) is False

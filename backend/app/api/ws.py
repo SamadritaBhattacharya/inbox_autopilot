@@ -21,6 +21,7 @@ from langgraph.types import Command
 
 from app.api.run_manager import Run, RunManager
 from app.config.container import AppContainer, build_container
+from app.events.current import bind as bind_emitter
 from app.events.protocol import AgentEvent
 from app.feedback.models import Feedback, FeedbackKind
 
@@ -37,6 +38,9 @@ async def drive(run: Run, container: AppContainer, task: str, *, owner: str = "l
     directly, so everything replays to a cockpit that reconnects later.
     """
     emitter = run.emitter
+    # Bind before anything can fail: a provider that is already rate-limited fails on the
+    # FIRST call, and that is exactly the run whose user most needs to be told why.
+    bind_emitter(emitter)
 
     # One browser per run, torn down with the run. Registered on the Run before anything can
     # fail, so a crash mid-setup still closes it — a leaked Chromium is invisible until the

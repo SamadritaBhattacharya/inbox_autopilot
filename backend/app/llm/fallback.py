@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
+from app.events.current import note_provider
 from app.llm.base import (
     AllProvidersExhausted,
     LLMClient,
@@ -69,6 +70,18 @@ class Attempt:
 #: verbatim would keep it out of the chain long after a rollover, so the wait is capped and
 #: the provider gets another look.
 COOLDOWN_CAP = 300.0
+
+
+def _plain(exc: ProviderError) -> str:
+    """The provider's complaint, trimmed to something a person can act on.
+
+    Groq's 429 body is a paragraph of organisation ids and token accounting; the part that
+    matters to a human is that the free tier is spent and roughly for how long.
+    """
+    text = str(exc)
+    for marker in (". Need more tokens", ". Please try again", ", Used"):
+        text = text.split(marker)[0]
+    return text[:200]
 
 
 class FallbackLLMClient:
@@ -133,10 +146,15 @@ class FallbackLLMClient:
                     raise
                 self._cool_down(exc)
                 logger.warning("provider %s exhausted, falling through: %s", exc.provider, exc)
+                note_provider(exc.provider, "exhausted", _plain(exc))
             else:
                 # Success clears any cooldown: a daily cap that has rolled over, or a key
                 # that was topped up, should not stay benched until a timer we guessed.
                 self._cooling_until.pop(provider.name, None)
+                if failures:
+                    # Only worth saying when something went wrong first — a healthy primary
+                    # answering normally is not news.
+                    note_provider(provider.name, "serving", "took over after a failure")
                 return result
 
         raise AllProvidersExhausted(failures)
@@ -153,6 +171,11 @@ class FallbackLLMClient:
         wait = min(float(exc.retry_after), COOLDOWN_CAP)
         self._cooling_until[exc.provider] = self._now() + wait
         logger.info("benching %s for %.0fs (it asked)", exc.provider, wait)
+        note_provider(
+            exc.provider,
+            "benched",
+            f"rate-limited; not retrying for about {wait / 60:.0f} minutes",
+        )
 
     async def _attempt_provider(
         self,

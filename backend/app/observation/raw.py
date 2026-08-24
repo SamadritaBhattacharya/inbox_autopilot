@@ -97,6 +97,11 @@ class PageMeta:
     thread_ref: str | None = None
     unread_count: int | None = None
     compose_open: bool = False
+    #: Which compose fields already hold content. Booleans only — the content itself is
+    #: precisely what must not reach the model in the clear.
+    to_filled: bool = False
+    subject_filled: bool = False
+    body_filled: bool = False
     #: The open dialog's box, when there is one: `(x, y, width, height)`, viewport-relative.
     #:
     #: Not for clicking — for PRIORITY. When a compose window is open, its fields are the

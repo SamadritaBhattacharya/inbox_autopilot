@@ -184,6 +184,12 @@ export class ObservationFunnel {
         threadToken,
         unreadCount: meta.unreadCount,
         composeOpen: meta.composeOpen,
+        // Coerced, not passed through: a hand-written fixture missing the key would emit
+        // `undefined`, which JSON drops entirely — and the conformance suite would then be
+        // comparing a missing field against Python's `false`.
+        toFilled: Boolean(meta.toFilled),
+        subjectFilled: Boolean(meta.subjectFilled),
+        bodyFilled: Boolean(meta.bodyFilled),
       },
       screenshotRef: options.screenshotRef ?? null,
       changed: options.changed ?? null,

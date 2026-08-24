@@ -35,7 +35,10 @@
     "view": "thread",
     "threadToken": "T1",
     "unreadCount": 12,
-    "composeOpen": false
+    "composeOpen": false,
+    "toFilled": false,
+    "subjectFilled": false,
+    "bodyFilled": false
   },
   "screenshotRef": null,
   "changed": null,

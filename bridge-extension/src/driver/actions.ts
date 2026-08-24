@@ -89,6 +89,26 @@ function textFor(action: ResolvedAction): string {
   return "";
 }
 
+/** Fields whose value is an ADDRESS and which need committing rather than merely filling. */
+const RECIPIENT_ARGS = ["recipient", "cc", "bcc"] as const;
+
+/**
+ * Does this `Type` need an Enter after it to take effect?
+ *
+ * True for the address arguments, and equally for a `text` value that is nothing but a token
+ * — that is a person being entered into a field, whichever field it is. In a To box Enter
+ * builds the chip; in the search box Enter runs the search. Both are what a human does next,
+ * and neither is what happens if we stop at typing.
+ *
+ * Decided from the ARGUMENT the model used, never the element's name: a name is page text
+ * and therefore untrusted, and "To" is localised.
+ */
+function needsCommit(action: ResolvedAction): boolean {
+  if (RECIPIENT_ARGS.some((arg) => String(action.call.args?.[arg] ?? "").trim())) return true;
+  const text = String(action.call.args?.text ?? "");
+  return Boolean(text.trim()) && isAllTokens(text);
+}
+
 export class ActionDriver {
   constructor(private readonly cdp: CdpSession) {}
 
@@ -151,6 +171,18 @@ export class ActionDriver {
         await this.cdp.send("Input.dispatchKeyEvent", { type: "char", text: character });
       }
     }
+    if (needsCommit(action)) {
+      // Commit the address into a chip.
+      //
+      // Gmail's To field is an autocomplete: typing leaves loose text with a suggestion
+      // dropdown hanging open over the compose window, and nothing is committed until Enter.
+      // Skip it and two things go wrong — the address may never attach to the draft, and the
+      // open dropdown covers the subject and body, so the next observation cannot see the
+      // fields the agent needs next.
+      await this.key("keyDown", "Enter");
+      await this.key("keyUp", "Enter");
+    }
+
     // NEVER log `text` — a recipient resolved from a token is raw PII by this point.
     return ok(`typed ${text.length} characters`);
   }

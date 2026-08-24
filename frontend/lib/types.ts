@@ -33,7 +33,9 @@ export type Entry =
   | { kind: "error"; message: string; errorCode: string | null }
   | { kind: "finalize"; success: boolean; reason: string; errorCode: string | null }
   /** The human pressed Stop. Distinct from `finalize`, which is the agent concluding. */
-  | { kind: "stopped" };
+  | { kind: "stopped" }
+  /** A model provider was rate-limited or fell through. Not a failure — an explanation. */
+  | { kind: "provider"; provider: string; status: string; detail: string };
 
 export type PendingApproval = {
   requestId: string;

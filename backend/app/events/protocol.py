@@ -34,6 +34,10 @@ FEEDBACK_ACK = "feedback_ack"
 RULE_CANDIDATE = "rule_candidate"
 #: A calendar event read out of a thread, drafted for a human to check.
 EVENT_PROPOSED = "event_proposed"
+#: A model provider was rate-limited, benched, or fell through to the next in the chain.
+#: The cockpit shows this because "it got slower" is otherwise indistinguishable from
+#: "it broke", and a free-tier daily cap is the single most common cause of both.
+PROVIDER = "provider"
 #: The message the writer composed, emitted before any browser action.
 DRAFT = "draft"
 #: Where the browser actually is. COCKPIT-ONLY: the URL is a raw identifier and never

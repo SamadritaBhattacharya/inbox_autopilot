@@ -44,9 +44,19 @@
     "MailContext": {
       "additionalProperties": false,
       "properties": {
+        "bodyFilled": {
+          "default": false,
+          "title": "Bodyfilled",
+          "type": "boolean"
+        },
         "composeOpen": {
           "default": false,
           "title": "Composeopen",
+          "type": "boolean"
+        },
+        "subjectFilled": {
+          "default": false,
+          "title": "Subjectfilled",
           "type": "boolean"
         },
         "threadToken": {
@@ -60,6 +70,11 @@
           ],
           "default": null,
           "title": "Threadtoken"
+        },
+        "toFilled": {
+          "default": false,
+          "title": "Tofilled",
+          "type": "boolean"
         },
         "unreadCount": {
           "anyOf": [

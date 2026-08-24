@@ -210,6 +210,35 @@ EXTRACT_JS = """
   const composeBox = dialogEl ? dialogEl.getBoundingClientRect() : null;
   const composeOpen = !!composeBox && composeBox.width > 0 && composeBox.height > 0;
 
+  // WHETHER each field has content, never what it says. A committed recipient becomes a
+  // chip — a separate node — so the input itself reads empty and the agent types the address
+  // again on top of the first. Reporting "filled" is the difference between an agent that
+  // knows what is left to do and one that guesses.
+  function filled(root, selectors) {
+    if (!root) return false;
+    for (const selector of selectors) {
+      for (const el of root.querySelectorAll(selector)) {
+        const text = (el.value !== undefined ? el.value : el.innerText) || '';
+        if (text.trim()) return true;
+      }
+    }
+    return false;
+  }
+  const toFilled = composeOpen && (
+    filled(dialogEl, ['[name="to"]', 'input[aria-label*="To"]', 'textarea[name="to"]']) ||
+    // The chip case: a committed recipient leaves the input empty and a removable pill
+    // beside it. This is the one that was being missed.
+    !!(dialogEl && dialogEl.querySelector(
+      '[data-hovercard-id], [email], .afV, [role="option"][aria-selected="true"]'
+    ))
+  );
+  const subjectFilled = composeOpen && filled(dialogEl, [
+    '[name="subjectbox"]', 'input[aria-label*="Subject"]', 'input[name="subject"]'
+  ]);
+  const bodyFilled = composeOpen && filled(dialogEl, [
+    '[g_editable="true"]', '[contenteditable="true"]', 'textarea'
+  ]);
+
   return {
     elements: out,
     meta: {
@@ -220,6 +249,9 @@ EXTRACT_JS = """
       scrollX: Math.round(window.scrollX),
       scrollY: Math.round(window.scrollY),
       composeOpen,
+      toFilled,
+      subjectFilled,
+      bodyFilled,
       focusBox: composeOpen
         ? { x: composeBox.left, y: composeBox.top,
             width: composeBox.width, height: composeBox.height }
@@ -315,5 +347,8 @@ def parse_meta(raw: dict[str, Any], *, thread_ref: str | None = None) -> PageMet
         view=detect_view(url, compose_open),  # type: ignore[arg-type]
         thread_ref=thread_ref,
         compose_open=compose_open,
+        to_filled=bool(raw.get("toFilled")),
+        subject_filled=bool(raw.get("subjectFilled")),
+        body_filled=bool(raw.get("bodyFilled")),
         focus_box=focus_box,
     )

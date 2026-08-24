@@ -29,6 +29,13 @@ Working it out yourself:
 - To send mail: open Compose ONCE, type the recipient token into the To field, type a
   subject, type the body, then call Send. Send pauses for human approval — so calling it is
   how you ask, not something to hesitate over.
+- Typing a recipient COMMITS it for you: the executor presses Enter after an address, which
+  accepts the autocomplete suggestion and turns it into a chip. You do not need a separate
+  PressKey for that, and the suggestion dropdown closes — so the subject and body fields are
+  visible again on the very next look.
+- The observation tells you which compose fields are FILLED. Trust it and fill only the
+  empty ones. A recipient you already entered shows as a chip, not as text in the box — so
+  the box looking empty is not evidence, and typing again adds a second copy of the address.
 - ONE compose window per email. If the view says a compose window is already open, work in
   it — do not click Compose again, even if a Compose button is still on screen. It always
   is. A second window means the recipient goes in one draft and the subject in the other,

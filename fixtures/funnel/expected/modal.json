@@ -42,7 +42,10 @@
     "view": "compose",
     "threadToken": null,
     "unreadCount": 12,
-    "composeOpen": true
+    "composeOpen": true,
+    "toFilled": false,
+    "subjectFilled": false,
+    "bodyFilled": false
   },
   "screenshotRef": null,
   "changed": null,

@@ -107,6 +107,10 @@
     "view": "inbox",
     "threadRef": null,
     "unreadCount": 12,
-    "composeOpen": false
+    "composeOpen": false,
+    "toFilled": false,
+    "subjectFilled": false,
+    "bodyFilled": false,
+    "focusBox": null
   }
 }

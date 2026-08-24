@@ -79,6 +79,20 @@ class MailContext(BaseModel):
     unread_count: int | None = Field(default=None, alias="unreadCount")
     compose_open: bool = Field(default=False, alias="composeOpen")
 
+    #: Which compose fields already have content. Meaningless unless `compose_open`.
+    #:
+    #: Booleans, never the text: whether a field is filled is what the agent needs in order
+    #: to decide what to do next, and the content itself is exactly what must not reach the
+    #: model in the clear.
+    #:
+    #: These exist because guessing was costing whole runs. A committed recipient becomes a
+    #: *chip* — a separate DOM node — so the To input reads as empty, and the agent typed the
+    #: address a second time on top of the first. The same blindness sent it hunting for a
+    #: subject field it had already filled.
+    to_filled: bool = Field(default=False, alias="toFilled")
+    subject_filled: bool = Field(default=False, alias="subjectFilled")
+    body_filled: bool = Field(default=False, alias="bodyFilled")
+
 
 class Observation(BaseModel):
     """What the model is allowed to see: a short, numbered, tokenized element list.

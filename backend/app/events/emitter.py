@@ -75,6 +75,17 @@ class EventEmitter:
     async def plan(self, steps: list[str]) -> None:
         await self._emit(protocol.PLAN_UPDATE, {"steps": steps})
 
+    async def provider(self, *, provider: str, status: str, detail: str) -> None:
+        """A model provider changed state — rate-limited, benched, or recovered.
+
+        Surfaced rather than logged because the user experiences a 429 as the agent going
+        quiet, and "the free tier is exhausted until tomorrow" is something only they can
+        act on. Buried in the server log it looks like the agent is broken.
+        """
+        await self._emit(
+            protocol.PROVIDER, {"provider": provider, "status": status, "detail": detail}
+        )
+
     async def draft(self, subject: str, body: str, tone: str) -> None:
         """The composed message, before the browser is touched.
 

@@ -40,6 +40,15 @@ export function useAgentRun(threadId: string, task?: string) {
   const [connected, setConnected] = useState(false);
   const [absent, setAbsent] = useState(false);
   const [location, setLocation] = useState("");
+  /**
+   * Cards the human has already answered.
+   *
+   * The pending question is DERIVED from the event log, so it stays on screen until the
+   * backend echoes something back — which is a full round trip plus a model call away. The
+   * card sat there after Send, looking ignored, and people pressed it again. Recording the
+   * answer locally dismisses it on the click that caused it.
+   */
+  const [answered, setAnswered] = useState<Set<string>>(new Set());
   // Transient by design: the LATEST activity replaces the last one, and it is cleared
   // when the run ends. Keeping a history of them would just be a noisier transcript.
   const [activity, setActivity] = useState<Activity | null>(null);
@@ -140,37 +149,49 @@ export function useAgentRun(threadId: string, task?: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
+  const pendingQuestion = useMemo(() => latestQuestion(events), [events]);
+  const pendingApproval = useMemo(() => latestApproval(events), [events]);
+  const pendingOptions = useMemo(() => latestOptions(events), [events]);
+
+  // Hide anything the human has already acted on. The backend is still the authority — it
+  // simply has not answered yet, and a card that lingers after a click reads as broken.
+  const question = pendingQuestion && !answered.has(pendingQuestion.requestId) ? pendingQuestion : null;
+  const approval =
+    pendingApproval && !answered.has(pendingApproval.requestId) ? pendingApproval : null;
+  const options = pendingOptions && !answered.has(pendingOptions.requestId) ? pendingOptions : null;
+
   const answer = useCallback(
     (text: string) => {
       send({ type: "answer", answer: text });
       setStatus("running");
+      // Dismiss on the click, not on the reply. See `answered`.
+      if (pendingQuestion) setAnswered((seen) => new Set(seen).add(pendingQuestion.requestId));
     },
-    [send],
+    [send, pendingQuestion],
   );
 
   const decide = useCallback(
     (verdict: "approve" | "edit" | "reject", edit?: string) => {
       send({ type: "decision", verdict, edit: edit ?? "" });
       setStatus("running");
+      if (pendingApproval) setAnswered((seen) => new Set(seen).add(pendingApproval.requestId));
     },
-    [send],
+    [send, pendingApproval],
   );
 
   const choose = useCallback(
     (option: number, text?: string) => {
       send({ type: "choice", option, text: text ?? "" });
       setStatus("running");
+      if (pendingOptions) setAnswered((seen) => new Set(seen).add(pendingOptions.requestId));
     },
-    [send],
+    [send, pendingOptions],
   );
 
   const feedback = useCallback((text: string) => send({ type: "feedback", text }), [send]);
   const stop = useCallback(() => send({ type: "stop" }), [send]);
 
   const timeline = useMemo(() => toTimeline(events, task), [events, task]);
-  const question = useMemo(() => latestQuestion(events), [events]);
-  const approval = useMemo(() => latestApproval(events), [events]);
-  const options = useMemo(() => latestOptions(events), [events]);
   const usage = useMemo(() => totalUsage(events), [events]);
 
   return {
@@ -279,6 +300,14 @@ function toTimeline(events: AgentEvent[], task?: string): Entry[] {
           success: bool(data.success),
           reason: str(data.reason),
           errorCode: (data.errorCode as string) ?? null,
+        });
+        break;
+      case "provider":
+        entries.push({
+          kind: "provider",
+          provider: str(data.provider),
+          status: str(data.status),
+          detail: str(data.detail),
         });
         break;
       case "run_complete":

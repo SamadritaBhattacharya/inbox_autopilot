@@ -205,6 +205,19 @@ function EntryRow({ entry }: { entry: Entry }) {
         </div>
       );
 
+    case "provider": {
+      // Rate limits are the single most common reason a run goes quiet, and they are the
+      // one cause the user can actually do something about. Shown as a note, not an error:
+      // the chain fell through and the run is still going.
+      const benched = entry.status === "benched" || entry.status === "exhausted";
+      return (
+        <Row label={benched ? "rate limit" : "provider"}>
+          <span className="text-text">{entry.provider}</span>
+          <span className="ml-2 text-faint">{entry.detail}</span>
+        </Row>
+      );
+    }
+
     case "stopped":
       return (
         <div className="rise mt-4 rounded-[--radius-card] border border-line bg-raised/40 px-4 py-3">

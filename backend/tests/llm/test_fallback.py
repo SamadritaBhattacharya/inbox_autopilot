@@ -295,3 +295,64 @@ async def test_success_clears_the_bench():
     await complete(chain)
 
     assert groq.call_count == 3
+
+
+# ── the user is told when a provider gives out ─────────────────────────────
+
+
+async def test_a_rate_limit_is_reported_to_the_cockpit(monkeypatch):
+    """A 429 is experienced by the user as the agent going quiet.
+
+    It is also the one failure they can act on — a free-tier daily cap needs a person to
+    wait, top up, or switch. Buried in the server log it looks like the agent is broken, so
+    it goes to the cockpit as a note rather than an error: the chain fell through and the
+    run is still going.
+    """
+    import app.llm.fallback as fallback_module
+
+    notices: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        fallback_module,
+        "note_provider",
+        lambda provider, status, detail: notices.append((provider, status, detail)),
+    )
+
+    chain, _groq, _backup = chain_with([capped()], [ok("fallback")], FakeClock())
+    await complete(chain)
+
+    statuses = {status for _p, status, _d in notices}
+    assert "exhausted" in statuses
+    assert any(provider == "groq" for provider, _s, _d in notices)
+
+
+async def test_the_notice_is_trimmed_to_something_a_person_can_use(monkeypatch):
+    """Groq's 429 body is a paragraph of organisation ids and token accounting."""
+    from app.llm.fallback import _plain
+
+    verbose = (
+        "quota exhausted: Rate limit reached for model `openai/gpt-oss-120b` in "
+        "organization `org_01abc` service tier `on_demand` on tokens per day (TPD): "
+        "Limit 200000, Used 199382, Requested 5233. Please try again in 33m13s. "
+        "Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings"
+    )
+
+    plain = _plain(ProviderQuotaExhausted("groq", verbose))
+
+    assert "Upgrade to Dev Tier" not in plain
+    assert "Rate limit reached" in plain
+    assert len(plain) <= 200
+
+
+async def test_a_healthy_provider_says_nothing(monkeypatch):
+    """A notice that fires when nothing is wrong gets ignored, taking the real one with it."""
+    import app.llm.fallback as fallback_module
+
+    notices: list = []
+    monkeypatch.setattr(
+        fallback_module, "note_provider", lambda *args: notices.append(args)
+    )
+
+    chain, _groq, _backup = chain_with([ok("fine")], [ok("unused")], FakeClock())
+    await complete(chain)
+
+    assert notices == []
