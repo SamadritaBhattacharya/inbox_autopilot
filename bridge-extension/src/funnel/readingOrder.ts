@@ -32,6 +32,19 @@ export type WireElement = Observation["elements"][number];
 export const DEFAULT_TOKEN_BUDGET = 2000;
 
 /**
+ * When a region is focused, everything OUTSIDE it shares this much smaller allowance — a
+ * fraction of the main budget, not the main budget itself.
+ *
+ * Priority alone is not enough: it decides ORDER within one shared budget, and a compose
+ * dialog's half-dozen fields cost so little that most of a 2000-token budget is still left
+ * over for whatever is behind it — a real inbox of ~140 rows fits under 1500 tokens, so on a
+ * typical mailbox nothing gets cut and the model still sees the whole list it was just told
+ * to ignore. A separate, hard cap is what turns "the dialog wins a tie-break" into "the
+ * inbox behind it is mostly ABSENT."
+ */
+export const OUTSIDE_FOCUS_BUDGET_FRACTION = 0.1;
+
+/**
  * Long values (a whole email body in a textarea) are clipped rather than dropped: the agent
  * needs to know the field HAS content, not to re-read all of it every turn.
  */
@@ -124,18 +137,30 @@ export class ReadingOrderFormatter {
       return (a.index ?? 0) - (b.index ?? 0);
     });
 
+    // A focus box gets its own, much smaller allowance for everything OUTSIDE it. `null`
+    // (no focus box at all) keeps every element competing for the single shared budget,
+    // exactly as before.
+    const outsideBudget = focus ? Math.floor(this.budget * OUTSIDE_FOCUS_BUDGET_FRACTION) : null;
+
     const kept: RawElement[] = [];
     let spent = 0;
+    let outsideSpent = 0;
     let budgetDropped = 0;
 
     for (const element of byValue) {
       const cost = estimateTokens(`[${element.index}] ${element.role} ${element.name}`);
+      const outside = outsideBudget !== null && !inside(element, focus);
+      if (outside && outsideSpent + cost > outsideBudget) {
+        budgetDropped += 1;
+        continue;
+      }
       if (spent + cost > this.budget) {
         budgetDropped += 1;
         continue;
       }
       kept.push(element);
       spent += cost;
+      if (outside) outsideSpent += cost;
     }
 
     kept.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));

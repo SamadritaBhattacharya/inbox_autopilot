@@ -21,6 +21,10 @@ Add `-k <substring>` to run a subset, e.g. `-k send/` for just the approval-gate
 15 golden tasks, scripted `LLMClient`, no browser, no network. Commit: pre-A1 (working tree,
 not yet committed — see [IMPROVEMENTS.md](IMPROVEMENTS.md) item 1).
 
+*Kept below exactly as first recorded — a point-in-time snapshot, not a running total. B2
+added a 16th task the same day; see the History table for current counts. Run
+`python -m tests.bench.run` for what the set looks like right now.*
+
 ```
 task                                ok   steps  calls  tokens  status          code
 -----------------------------------------------------------------------------------------
@@ -91,3 +95,4 @@ baseline. The second was closed the same day because it is what B1 needed to be 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2026-08-24 | 15 | 100% | 100% | 0 | 1 | 940 | Initial baseline (B0) |
 | 2026-08-24 | 15 | 100% | 100% | 0 | 1 | 940 | B1: `invalid_referents` now sourced from the real trajectory, not a boundary workaround. Numbers unchanged — the fix was to what the number MEANT. |
+| 2026-08-24 | 16 | 100% | 100% | 0 | 1 | 960 | B2: added `pre/multi-recipient-asks-delivery-mode` — two recipients must pause for exactly one extra, correctly batched question (1 llm call, +20 tokens) before router/planner ever run. |

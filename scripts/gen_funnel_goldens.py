@@ -110,6 +110,43 @@ def _row(node_id: int, y: float, sender: str, subject: str) -> list[dict]:
     ]
 
 
+def _narrow_row(node_id: int, y: float, sender: str, subject: str) -> list[dict]:
+    """A left-hand-panel-width row, for `region_scope` — narrow enough to sit clear of the
+    dialog's rectangle entirely, so that case tests the reading-order budget cap alone
+    without also triggering geometric occlusion (`modal`, above, already covers that)."""
+    return [
+        element(
+            node_id,
+            role="listitem",
+            name=f"{sender} {subject}",
+            y=y,
+            width=360.0,
+            height=40.0,
+            interactive=True,
+        ),
+        element(
+            node_id + 1,
+            role="sender",
+            name=sender,
+            x=10.0,
+            y=y + 8,
+            width=100.0,
+            height=18.0,
+            parentId=node_id,
+        ),
+        element(
+            node_id + 2,
+            role="generic",
+            name=subject,
+            x=120.0,
+            y=y + 8,
+            width=230.0,
+            height=18.0,
+            parentId=node_id,
+        ),
+    ]
+
+
 CASES: dict[str, dict] = {
     # A realistic inbox: structured sender names, an address in a subject, a compose button.
     "inbox": {
@@ -144,6 +181,50 @@ CASES: dict[str, dict] = {
                     receivesPointer=True, parentId=50),
         ],
         "meta": meta(view="compose", composeOpen=True),
+    },
+    # B3: a compose dialog with a FOCUS BOX set, proving Python and TS agree on the
+    # region-scoping cap. `modal` (above) already covers geometric occlusion; this case
+    # is positioned clear of the dialog's rectangle so it is not ALSO occluded, and tests
+    # the reading-order budget cap alone: some rows still fit in the small "outside the
+    # box" allowance (cheap individual rows), and that is fine — the mechanism only needs
+    # to be seen firing here, since it is measured precisely, at realistic (140-row)
+    # scale, in `test_stages.py` / `readingOrder.test.ts`. See
+    # `OUTSIDE_FOCUS_BUDGET_FRACTION` in `reading_order.py`.
+    "region_scope": {
+        "elements": [
+            element(1, role="button", name="Compose", y=40.0, width=90.0, height=36.0,
+                    interactive=True),
+            # A narrow left-hand row list, clear of the dialog's rectangle entirely — this
+            # fixture isolates the READING-ORDER cap. `modal` (above) already covers
+            # geometric occlusion; conflating the two here would make it unclear which
+            # mechanism a future reader is looking at.
+            *[
+                item
+                for i in range(20)
+                for item in _narrow_row(
+                    100 + i * 3,
+                    120.0 + i * 44.0,
+                    f"Sender {i}",
+                    f"Subject line number {i} about a routine update",
+                )
+            ],
+            element(500, role="dialog", name="New Message", x=450.0, y=300.0,
+                    width=500.0, height=400.0, paintOrder=99, receivesPointer=True),
+            element(501, role="textbox", name="To", x=470.0, y=340.0, width=440.0,
+                    height=24.0, interactive=True, paintOrder=100, receivesPointer=True,
+                    parentId=500),
+            element(502, role="textbox", name="Subject", x=470.0, y=380.0, width=440.0,
+                    height=24.0, interactive=True, paintOrder=101, receivesPointer=True,
+                    parentId=500),
+            element(503, role="button", name="Send (Ctrl-Enter)", x=470.0, y=650.0,
+                    width=80.0, height=32.0, interactive=True, paintOrder=102,
+                    receivesPointer=True, parentId=500),
+        ],
+        "meta": meta(
+            view="compose",
+            composeOpen=True,
+            focusBox=[450.0, 300.0, 500.0, 400.0],
+        ),
     },
     # Deep layout nesting: div > div > button, all the same box.
     "wrappers": {
@@ -233,6 +314,7 @@ def run_case(case: dict) -> dict:
         for e in case["elements"]
     ]
     m = case["meta"]
+    focus = m.get("focusBox")
     page = PageMeta(
         context_ref=m["contextRef"],
         title=m["title"],
@@ -247,6 +329,14 @@ def run_case(case: dict) -> dict:
         to_filled=m.get("toFilled", False),
         subject_filled=m.get("subjectFilled", False),
         body_filled=m.get("bodyFilled", False),
+        # Was missing entirely: every case's `focusBox` was silently dropped, so no
+        # fixture could ever have exercised focus-box behaviour through this generator
+        # regardless of what its meta claimed. See B3 in docs/IMPROVEMENT-PLAN.md.
+        #
+        # A 4-element ARRAY, not `{x,y,width,height}` — the TS conformance test casts
+        # a fixture's `meta` straight to `PageMeta`, whose `focusBox` is a tuple; an
+        # object here would deserialise fine in Python and throw on the TS side.
+        focus_box=tuple(focus) if focus else None,
     )
 
     observation, _geometry, _report = funnel.run(elements, page)

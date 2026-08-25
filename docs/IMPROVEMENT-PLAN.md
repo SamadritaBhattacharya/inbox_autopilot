@@ -223,7 +223,7 @@ same reason; with the root cause fixed, `invalid_referents` now reads from the r
 No new validation logic was written — B2 and B3 build on a dispatcher that was already doing this
 job; what it lacked was a way to remember that it had.
 
-## B2. Conditional slots + planner fan-out · ~2 days · *the "A and B" ask*
+## B2. Conditional slots + planner fan-out · ~2 days · *the "A and B" ask* · DONE (with one deliberate deviation)
 
 `slots.py` is good design — a table, not prompt text, with alternative groups and thresholds
 priced by blast radius. Extend it in the same shape rather than teaching the worker anything.
@@ -259,7 +259,58 @@ be paid on every turn of every run forever — and still be got wrong on turn 7.
 **Acceptance:** a fixture table of ~40 utterances → expected
 `(action, missing_slots, conditional_asks, plan_shape)`, asserted with no LLM and no browser.
 
-## B3. Region-of-interest funnel scoping · ~1 day · biggest single token win
+**Status:** built substantially as specified — `app/manager/slots.py` now has `CONDITIONAL_SLOTS`
+alongside `REQUIRED_SLOTS`, in exactly the shape asked for: `ConditionalSlot(slot, predicate,
+prompt, default, options)`, keyed by `Action`. `recipient_count()` counts vault tokens first (the
+common case, since an operator-supplied address is already minted by the time the gate runs) and
+falls back to a naive split for a name with no address yet. `outstanding_slots()` evaluates
+conditional requirements only once every required group already clears — asking "one email or
+separate?" before the gate even knows the topic would be backwards, and would cost a second round
+trip for a task that needs both answers anyway — and `question_for` phrases the conditional ask
+with its recommended default baked in ("I'll send one email to everyone unless you say
+separately"), never as a bare noun phrase. `send_email` and `forward` both carry the rule. A
+19-case fixture table plus targeted edge cases (53 tests) covers this in isolation, no LLM, no
+browser — the plan's own acceptance criterion.
+
+**Rule 3, "the worker sees an unambiguous single job," is honoured — by a lighter mechanism than
+literal N-way graph dispatch.** The plan's wording ("the planner fans out into N compose
+sub-tasks, each dispatched to ComposeWorker") describes real parallel/sequential subgraph
+invocation — LangGraph's `Send` API or an equivalent. This graph has no fan-out concept anywhere
+today (not even `CalendarWorker` or `TriageWorker` use it), and building one for this feature alone
+would be a real architecture change with its own failure modes: nested checkpointing, approval
+interrupts crossing a subgraph boundary, a new class of test to write. That risk was not
+justified by this feature alone.
+
+Instead, `context_gate` resolves `delivery_mode` exactly as planned, and `workers/rendering.py`'s
+`task_block` turns the resolution into a concrete, numbered instruction the *existing* ReAct loop
+carries out within one worker run — e.g. for three recipients, chosen separately:
+
+```
+This goes to 3 people SEPARATELY — 3 separate emails, never one email with more than
+one of them in it. Send them one at a time, in this order:
+  1. P1
+  2. P2
+  3. P3
+Compose, fill, and Send ONE of these completely — including its own approval — before
+opening the next. Reuse the same subject and body for each; only the recipient changes.
+```
+
+The property the plan actually cares about still holds: **the worker never decides**
+together-vs-separate — that decision is made once, upstream, and handed down as an instruction
+it only executes. And because `approval_fingerprint` is content-bound (§9, `app/surface/dispatch.py`),
+each of the N sequential `Send` calls carries different resolved text and therefore needs its own
+separate human approval — "each with its own approval gate" holds in substance, just not via N
+separate graph dispatches. `test_multi_recipient_delivery.py` drives the real graph end to end and
+proves the chain connects: two recipients → the gate asks exactly one extra, correctly batched
+question → the human's free-text answer resolves it → the worker's own prompt states the decision,
+never re-derives it.
+
+If real per-recipient fan-out (independent retries, independent progress per email, one recipient's
+failure not blocking another's) becomes worth its own risk later, `CONDITIONAL_SLOTS` and
+`resolved_delivery_mode` do not change — only what `dispatch` does with `delivery_mode == "separate"`
+would.
+
+## B3. Region-of-interest funnel scoping · ~1 day · biggest single token win · DONE (funnel half; the tool-binding half didn't apply)
 
 When `composeOpen`, the worker does not need 120 inbox rows. Scope the funnel to the compose
 subtree.
@@ -273,7 +324,62 @@ tool schema costs 100–200 tokens and is a hallucination surface; removing an i
 correctness. This is where "ONE compose window per email" stops being a sentence and becomes a
 precondition.
 
-## B4. Prompt diet · ~1 day · after B1–B3, never before
+**Status:** the funnel half was a real, well-hidden gap — the tool-binding half wasn't, because it
+described a mechanism this codebase doesn't have.
+
+*The funnel.* A focus box (`meta.focus_box`, set only when `composeOpen`) already existed and
+already made compose fields win a *priority tie-break* against inbox rows in
+`reading_order.py`/`readingOrder.ts` — that was the earlier fix for the subject-field-trimmed bug.
+But priority alone only decides ORDER within one shared 2000-token budget, and a compose dialog's
+half-dozen fields cost so little that most of that budget was still unspent. Measured against a
+realistic 140-row inbox: **99 of 140 background rows were still in the observation while
+composing** — the model could still see, and still reason about clicking, almost the entire
+mailbox behind the dialog it had just opened. Priority won the tie-break; it never came CLOSE to
+being tested, because the budget was never actually tight.
+
+Fixed with a second, much smaller allowance (`OUTSIDE_FOCUS_BUDGET_FRACTION = 0.1`, i.e. 10% of
+the main budget) reserved specifically for whatever is OUTSIDE the focus box, evaluated in the
+same priority-sorted pass. With the same 140-row inbox: **10 of 140 rows survive (93% cut)**, and
+all compose fields still fully survive regardless. Mirrored in both funnels — `reading_order.py`
+and `readingOrder.ts` — with matching constants and matching tests (3 new cases each, plus a new
+`region_scope` conformance fixture proving the two languages agree on a real end-to-end scenario,
+not just their own isolated unit tests).
+
+**Two pre-existing bugs surfaced building this, both fixed as prerequisites:**
+- `backend/tests/observation/test_conformance.py`'s `run()` and `scripts/gen_funnel_goldens.py`'s
+  `run_case()` never threaded a fixture's `focusBox` (or `toFilled`/`subjectFilled`/`bodyFilled`,
+  in the test harness) into `PageMeta` at all. No fixture could ever have exercised focus-box
+  behaviour through either path, regardless of what its `meta` claimed — `modal.json`'s own
+  `focusBox: null` was consistent with a harness that would have ignored it either way. Fixed by
+  passing all four through; confirmed as a true no-op against every existing golden (only the new
+  `region_scope` fixture is new — `git diff` on the other six is empty).
+- The two languages disagree on `focusBox`'s wire shape: `extract.py`'s real executor-side JS
+  sends `{x,y,width,height}` (an object), but the TS conformance test casts a fixture's `meta`
+  straight to `PageMeta`, whose `focusBox` field is a 4-tuple. A fixture written as an object
+  parses fine on the Python side and throws `TypeError: box is not iterable` on the TS side —
+  caught immediately by running both suites against the same new fixture, which is exactly what
+  this conformance mechanism is for. Fixtures now store `focusBox` as a 4-element array;
+  `test_conformance.py` and `gen_funnel_goldens.py` both do `tuple(focus)` before constructing
+  `PageMeta`.
+
+*The tool binding.* There is no `Compose` tool to remove from a bound set — opening compose is an
+ordinary `Click(index=N)`, and `Click` is the generic pointer verb used for every clickable element
+including the compose fields themselves; unbinding it would break composing, not just re-composing.
+The protection this bullet was reaching for already existed, built before this plan, as
+`COMPOSE_ALREADY_OPEN` in `app/surface/dispatch.py` — a dispatch-time refusal keyed on the specific
+target (an element named like "Compose") and the current state (`mail.compose_open`), which is a
+more precise lever than a blanket verb removal would have been anyway. Nothing needed building
+here; B1's writeup already covers it.
+
+One caution against overclaiming, corrected during review: the funnel fix does **not** generally
+make the Compose button itself vanish from the observation while composing. A single button is
+cheap enough to comfortably survive the outside-focus allowance alongside a few background rows —
+confirmed in the `region_scope` fixture, where "Compose" is the first surviving element. The fix's
+real effect is on background CONTENT (rows, threads, list items), not on making every background
+control disappear; `COMPOSE_ALREADY_OPEN` remains the actual, and sufficient, defence against a
+second click on Compose specifically.
+
+## B4. Prompt diet · ~1 day · after B1–B3, never before · DONE
 
 Only now delete the scar tissue, because B1–B3 have made each line redundant in code. Then verify
 against B0: if the double-compose bug returns, a migration was incomplete.
@@ -283,6 +389,65 @@ Also confirm `intake`, `router`, and `verify` actually use the `classifier` role
 inserted above it voids the cache.
 
 **Acceptance:** `worker.txt` under 300 tokens with no regression in the B0 table.
+
+**Status:** `worker.txt` cut from 898 tokens to 327 (a 64% reduction) — close to, not quite under,
+the 300 target; the remainder didn't yield to further cutting without removing content nothing
+else enforces (see below). Went rule by rule against what B1–B3 actually built, not by feel:
+
+**Cut, because something else now says the same thing, dynamically, only when it's true:**
+- *"ONE compose window per email… do not click Compose again"* — triply redundant. The dispatcher
+  already refuses a second click with a typed correction (`COMPOSE_ALREADY_OPEN`, pre-existing,
+  covered in B1's writeup), and `observation_block` already prints *"A COMPOSE WINDOW IS ALREADY
+  OPEN… Do not click Compose again"* every turn a dialog is open. A static rule buried among a
+  dozen others is a weaker signal than a live one attached to the state that made it true.
+- *"The observation tells you which compose fields are FILLED… typing again adds a SECOND
+  copy"* — byte-for-byte duplicated by `observation_block`'s own `To: FILLED · Subject: empty…`
+  line, which only appears while it's relevant. Kept a one-clause pointer ("trust the FILLED/empty
+  state") in the static prompt so the concept isn't introduced cold; the specifics live dynamically.
+- *"Typing a recipient COMMITS it… you do not need a separate PressKey"* — this explained a
+  MECHANISM (why a chip appears) rather than corrected a violation. Now that the FILLED flags tell
+  the model the outcome directly, it doesn't need to understand the mechanism to act correctly.
+- *"You will never see a real address, and a literal address in an action is rejected"* —
+  `UNKNOWN_TOKEN` already returns a clear correction ("carries a literal address rather than a
+  token…") the one time this might come up. Compressed to a clause rather than fully deleted, since
+  a first-attempt mistake here still costs a turn even though it self-corrects.
+
+**Kept, verified as still load-bearing — not cut on a hunch:**
+- *"Never ask the operator for a token you were already given"* and *"Only use AskUser for
+  something you cannot see or infer"* — no code stops a redundant `AskUser` call; nothing
+  repetition-guards differently-worded questions. Still the only defence against this failure mode.
+- *"Prefer `Send` over clicking a Send button… the verb describes itself on the approval card"* —
+  checked, not assumed: `approval.py`'s `KIND_FOR_VERB` maps only `Send`/`SendInvite`/
+  `DeleteForever` to a human-readable summary ("Send this email"); anything else defaults to `"Run
+  {verb}"`. `Click(index=108)` genuinely produces a worse approval card ("Run Click") than `Send`
+  does. This rule is true and nothing makes it redundant.
+- *"Call exactly one tool per turn"* — kept after finding a real reason to: `loop.py`'s reason node
+  takes `result.tool_calls[0]` unconditionally, and no request ever sets `parallel_tool_calls:
+  false`. If a provider ever returned more than one call, the rest would be **silently dropped**
+  with no signal to the model at all — worse than a typed correction, and not something to cut
+  guidance for. Recorded as its own finding below; not fixed here, since fixing a silent-drop with
+  no benchmark coverage of the failure is a different, separately-scoped task.
+- *"Assessment: <did the last action work?>"* — kept short. Not enforced (that's B8's job), but
+  `agent/assessment.py`'s `split_assessment` already parses it and `FeedbackKind.ASSESSMENT`
+  already records it (B7's territory); dropping the instruction would silently stop that channel.
+
+**Verified, not assumed:**
+- `intake` and `router` already use `role="classifier"` — no drift to fix.
+- `verify` makes **no LLM call at all** in v1 (`recovery_nodes.py`: "Deterministic only, and
+  deliberately so… a rubric check costs a model call at exactly the moment the provider is most
+  likely to be the thing that broke"). The plan's question doesn't apply to it.
+- Every node's cacheable system message is genuinely first and alone at that position — confirmed
+  by reading each node's `messages = [...]` construction, not by grepping for the word "cacheable".
+
+**One finding this check surfaced that the plan didn't anticipate:** `Message.cacheable` is set to
+`True` on every system message across all six nodes and is **never read anywhere** —
+`grep -rn "\.cacheable\b" app/` returns nothing. CLAUDE.md §14 names prompt caching as a primary
+free-tier mitigation ("stable prefix cache-marked"); the marking exists, the mechanism that would
+act on it does not. Whether Groq/OpenRouter/Gemini's OpenAI-compatible endpoints need an explicit
+`cache_control`-style parameter or already auto-cache long repeated prefixes server-side is a real
+question this session didn't answer — worth its own scoped investigation before assuming either
+way. Not fixed here: B4's job was cutting prompt bulk, and this is a wiring question, not a wording
+one. Recorded as item 21 in IMPROVEMENTS.md.
 
 ## B5. Procedural memory · ~1 week · *the "remember where Send is" ask*
 
@@ -443,8 +608,8 @@ baseline.
 | **B0** | **Eval harness** | A2 | **every claim below becomes checkable** |
 | B1 | Dispatcher as validator | B0 | hallucination becomes a metric |
 | B2 | Conditional slots + fan-out | B0 | the A-vs-B behaviour |
-| B3 | ROI scoping + phase binding | B0 | biggest token cut |
-| B4 | Prompt diet | B1–B3 | the rest of the token cut |
+| B3 | ROI scoping + phase binding | B0 | biggest token cut — DONE (93% cut on background at realistic scale) |
+| B4 | Prompt diet | B1–B3 | the rest of the token cut — DONE (898 -> 327 tokens, 64%) |
 | A4 | Extension on real Gmail | A1 | the deployable surface |
 | A5–A6 | Budgets + auth binding | A4 | safe to expose |
 | B5 | Macros + procedural memory | B0–B4 | 5 round trips → 1 |

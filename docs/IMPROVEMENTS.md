@@ -58,6 +58,12 @@ because the same classes of bug will recur, and the notes are the cheapest defen
   ~140 inbox rows, so Subject and Send were trimmed before the model saw them. It then
   scrolled a dialog that does not scroll until the stuck guard killed the run. An open dialog
   now outranks everything behind it.
+- **The fix above wasn't enough at realistic scale.** Outranking is a *tie-break* within one
+  shared budget, and a dialog's half-dozen fields cost so little that the budget was rarely
+  actually tight — measured against a real 140-row inbox, 99 of 140 background rows were
+  still in the observation while composing. Background elements now get their own, much
+  smaller allowance instead of merely losing ties: **10 of 140 survive (93% cut)**, with
+  every compose field still fully intact. Mirrored in both funnel implementations.
 - **It could not tell a field was already filled.** A committed recipient becomes a *chip*, a
   separate node, so the To input read empty and the address was typed twice. `MailContext`
   now reports `toFilled` / `subjectFilled` / `bodyFilled` — booleans only, never content.
@@ -132,8 +138,10 @@ better — but the cockpit currently looks broken rather than deliberately empty
 ### 6. The funnel exists twice
 
 Python for Playwright, TypeScript for the extension. The conformance suite pins them to
-shared fixtures and has already caught one real divergence, but it only covers six cases.
-Anything outside those cases can still drift silently.
+shared fixtures and has already caught two real divergences — most recently a wire-shape
+mismatch on `focusBox` (object on one side, tuple on the other) that building B3 tripped
+over immediately — but it only covers seven cases now. Anything outside those cases can
+still drift silently.
 
 ### 7. Pairing codes do not survive a restart
 
@@ -192,14 +200,15 @@ thinks, not whether it survives.
 | --- | --- | --- | --- |
 | 11 | ~~**No eval harness**~~ **DONE** — §20 promised one; built as `backend/tests/bench/` | No way to tell whether a change helped | B0 |
 | 12 | ~~**Hallucinated referents are not typed failures**~~ **DONE, but not as scoped** — they already were; the real gap was that the typed code never reached the trajectory (see B1) | "It clicked the wrong thing" with no metric | B1 |
-| 13 | **Ambiguity is resolved in the loop, not in PRE** | Cannot ask "together or separately?" | B2 |
-| 14 | **The funnel is not scoped to the active region** | 120 inbox rows sent while composing | B3 |
-| 15 | **~900 tokens of prompt scar tissue** | Slow, expensive, and dilutes every other rule | B4 |
+| 13 | ~~**Ambiguity is resolved in the loop, not in PRE**~~ **DONE** — conditional slots resolve it in `context_gate`; the worker gets a concrete instruction, never a decision | Cannot ask "together or separately?" | B2 |
+| 14 | ~~**The funnel is not scoped to the active region**~~ **DONE** — a focus box already won priority ties; it now gets its own hard cap, since ties rarely fired on a real inbox | 120 inbox rows sent while composing | B3 |
+| 15 | ~~**~900 tokens of prompt scar tissue**~~ **DONE** — cut to 327 (64%); every removal checked against what code now actually enforces, not by feel | Slow, expensive, and dilutes every other rule | B4 |
 | 16 | **No procedural memory** | Re-derives where Send is on every single run | B5 |
 | 17 | **Recovery strategies are hand-ranked, never learned** | Self-healing does not heal better over time | B6 |
 | 18 | **The feedback loop is built but not closed** — `ENDORSEMENT` is never recorded, `RuleCandidate` is computed and never read, nothing asks how a run went | It only learns from complaints, and never from what worked | B7 |
 | 19 | **Assessments are recorded but change nothing** | `NO_EFFECT` is spotted and then repeated until a guard fires | B8 |
 | 20 | **Reliability and latency are adjectives, not numbers** — `latency_ms` is captured and never reported | No way to notice a regression | B9 |
+| 21 | **Prompt caching is marked but not wired** — `Message.cacheable=True` is set on every system message across all six LLM-calling nodes and read by nothing; CLAUDE.md §14 names it as a primary free-tier mitigation | The gateway's own documented cost lever may not be doing anything | — |
 
 The unifying diagnosis: `worker.txt` is full of English patches for defects that belong in the
 action layer. Every one of those lines is a tax paid on every turn and enforced only

@@ -8,6 +8,44 @@ opening the module that decides when to stop a run.
 from __future__ import annotations
 
 from app.agent.state import AgentState
+from app.manager.intent import TaskIntent
+from app.manager.slots import (
+    CONDITIONAL_SLOTS,
+    resolved_delivery_mode,
+    split_recipients,
+)
+
+
+def _delivery_instruction(intent: TaskIntent | None) -> str | None:
+    """How to handle more than one recipient, decided BEFORE the worker ever sees the task.
+
+    This is the point of resolving `delivery_mode` in `context_gate` rather than leaving it
+    for the ReAct loop: the worker is never asked to decide together-vs-separate, only to
+    carry out a decision that already has an unambiguous, concrete shape. See
+    `docs/IMPROVEMENT-PLAN.md` §B2.
+    """
+    if intent is None:
+        return None
+    if not any(c.slot == "delivery_mode" for c in CONDITIONAL_SLOTS.get(intent.action, ())):
+        return None
+    people = split_recipients(intent.slots.get("recipient_identity", ""))
+    if len(people) <= 1:
+        return None
+
+    if resolved_delivery_mode(intent) == "separate":
+        steps = "\n".join(f"  {i}. {person}" for i, person in enumerate(people, 1))
+        return (
+            f"This goes to {len(people)} people SEPARATELY — {len(people)} separate "
+            "emails, never one email with more than one of them in it. Send them one at a "
+            f"time, in this order:\n{steps}\n"
+            "Compose, fill, and Send ONE of these completely — including its own approval "
+            "— before opening the next. Reuse the same subject and body for each; only the "
+            "recipient changes."
+        )
+    return (
+        f"This goes to {len(people)} people TOGETHER — ONE email, all of them in the To "
+        f"field at once: {', '.join(people)}. Do not open more than one compose window."
+    )
 
 
 def task_block(state: AgentState) -> str:
@@ -26,11 +64,23 @@ def task_block(state: AgentState) -> str:
 
     intent = state.intent
     if intent is not None:
-        filled = {name: value for name, value in intent.slots.items() if str(value).strip()}
+        filled = {
+            name: value
+            for name, value in intent.slots.items()
+            # `delivery_mode` is raw free text ("separately please") — the worker gets the
+            # RESOLVED instruction below instead, not the human's unparsed answer to parse
+            # a second time itself.
+            if str(value).strip() and name != "delivery_mode"
+        }
         if filled:
             lines.append("")
             lines.append("Already established (use these — they are resolved and valid):")
             lines.extend(f"- {name}: {value}" for name, value in filled.items())
+
+        instruction = _delivery_instruction(intent)
+        if instruction:
+            lines.append("")
+            lines.append(instruction)
 
     draft = state.draft
     if draft is not None:

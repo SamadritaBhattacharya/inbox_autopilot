@@ -25,6 +25,20 @@ from app.observation.raw import RawElement
 #: history, and the model's own reasoning.
 DEFAULT_TOKEN_BUDGET = 2000
 
+#: When a region is focused, everything OUTSIDE it shares this much smaller allowance —
+#: a fraction of the main budget, not the main budget itself.
+#:
+#: Priority alone (`_priority`, below) is not enough. It decides ORDER within one shared
+#: budget, and a compose dialog's half-dozen fields cost so little that most of a 2000-token
+#: budget is still left over for whatever is behind it — a real inbox of ~140 rows fits in
+#: under 1500 tokens, so on a typical mailbox NOTHING gets cut and the model still sees the
+#: whole list it was just told to ignore. A separate, hard cap is what turns "the dialog
+#: wins a tie-break" into "the inbox behind it is mostly ABSENT" — the actual point of a
+#: focus box: while composing, nothing outside the dialog is reachable or relevant, and an
+#: agent that can still see two hundred rows behind it is an agent that can still reason
+#: about clicking one of them.
+OUTSIDE_FOCUS_BUDGET_FRACTION = 0.1
+
 #: Long values (a whole email body in a textarea) are clipped rather than dropped: the
 #: agent needs to know the field HAS content, not to re-read all of it every turn.
 MAX_TEXT_LENGTH = 160
@@ -113,17 +127,31 @@ class ReadingOrderFormatter:
             reverse=True,
         )
 
+        # A focus box gets its own, much smaller allowance for everything OUTSIDE it — see
+        # `OUTSIDE_FOCUS_BUDGET_FRACTION`. `None` (no focus box at all) keeps every element
+        # competing for the single shared budget, exactly as before.
+        outside_budget = (
+            int(self._budget * OUTSIDE_FOCUS_BUDGET_FRACTION) if focus_box is not None else None
+        )
+
         kept: list[RawElement] = []
         spent = 0
+        outside_spent = 0
         dropped = 0
 
         for element in by_value:
             cost = estimate_tokens(f"[{element.index}] {element.role} {element.name}")
+            outside = outside_budget is not None and not _inside(element, focus_box)
+            if outside and outside_spent + cost > outside_budget:
+                dropped += 1
+                continue
             if spent + cost > self._budget:
                 dropped += 1
                 continue
             kept.append(element)
             spent += cost
+            if outside:
+                outside_spent += cost
 
         kept.sort(key=lambda e: e.index or 0)
 

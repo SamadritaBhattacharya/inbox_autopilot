@@ -173,6 +173,19 @@ GOLDEN: tuple[GoldenTask, ...] = (
         expect_status="awaiting_human",
         expect_interrupt=True,
     ),
+    GoldenTask(
+        name="pre/multi-recipient-asks-delivery-mode",
+        task="email P1 and P2 about the Friday demo",
+        script=(intake("send_email", recipient_identity="P1, P2", topic="the Friday demo"),),
+        expect_status="awaiting_human",
+        expect_interrupt=True,
+        expect_llm_calls=1,
+        notes=(
+            "B2: a required slot being satisfied is not enough when there are two "
+            "recipients — delivery_mode must ALSO be asked, in the same batched "
+            "question, before the router or planner ever run."
+        ),
+    ),
     # ── IN: the approval gate ──
     GoldenTask(
         name="send/pauses-before-sending",

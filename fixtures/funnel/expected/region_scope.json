@@ -1,0 +1,152 @@
+{
+  "protocolVersion": "1.1.0",
+  "contextId": "T1",
+  "title": "Inbox (12) - P1 - Gmail",
+  "viewport": {
+    "width": 1280,
+    "height": 800,
+    "scrollX": 0,
+    "scrollY": 0
+  },
+  "elements": [
+    {
+      "index": 1,
+      "role": "button",
+      "name": "Compose",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 2,
+      "role": "listitem",
+      "name": "C1 Subject line number 0 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 3,
+      "role": "listitem",
+      "name": "C2 Subject line number 1 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 4,
+      "role": "listitem",
+      "name": "C3 Subject line number 2 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 5,
+      "role": "listitem",
+      "name": "C4 Subject line number 3 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 6,
+      "role": "listitem",
+      "name": "C5 Subject line number 4 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 7,
+      "role": "dialog",
+      "name": "New Message",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 8,
+      "role": "listitem",
+      "name": "C6 Subject line number 5 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 9,
+      "role": "textbox",
+      "name": "To",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 10,
+      "role": "listitem",
+      "name": "C7 Subject line number 6 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 11,
+      "role": "textbox",
+      "name": "Subject",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 12,
+      "role": "listitem",
+      "name": "C8 Subject line number 7 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 13,
+      "role": "listitem",
+      "name": "C9 Subject line number 8 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 14,
+      "role": "listitem",
+      "name": "C10 Subject line number 9 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 15,
+      "role": "listitem",
+      "name": "C11 Subject line number 10 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 16,
+      "role": "listitem",
+      "name": "C12 Subject line number 11 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 17,
+      "role": "listitem",
+      "name": "C13 Subject line number 12 about a routine update",
+      "value": null,
+      "isNew": true
+    },
+    {
+      "index": 18,
+      "role": "button",
+      "name": "Send (Ctrl-Enter)",
+      "value": null,
+      "isNew": true
+    }
+  ],
+  "mail": {
+    "view": "compose",
+    "threadToken": null,
+    "unreadCount": 12,
+    "composeOpen": true,
+    "toFilled": false,
+    "subjectFilled": false,
+    "bodyFilled": false
+  },
+  "screenshotRef": null,
+  "changed": null,
+  "droppedCount": 15,
+  "hint": "15 more items not shown: 12 below, 3 trimmed to fit."
+}

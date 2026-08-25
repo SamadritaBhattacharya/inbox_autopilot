@@ -327,3 +327,94 @@ def test_identity_is_role_and_name_not_index():
         viewport_height=VIEWPORT_H,
     )
     assert identity_set(listed) == {"button:Compose"}
+
+
+# ── region-of-interest scoping (B3): a focus box hard-caps what is OUTSIDE it ──
+
+
+def _inbox_and_compose(count: int = 140):
+    """A realistically-sized inbox behind a small compose dialog, at the DEFAULT budget.
+
+    Deliberately sized to what a real Gmail inbox looks like — not the artificially tight
+    budgets (`token_budget=40`, `=300`) the other tests here use to force a cut. At the
+    default 2000-token budget, 140 short rows cost well under 1500 tokens on their own,
+    which is precisely how the compose subject field was trimmed in production while
+    "priority, not exclusion" left plenty of room for everything behind it.
+    """
+    rows = [
+        element(
+            i,
+            role="listitem",
+            name=f"Person {i} — Re: a fairly typical subject line about something {i}",
+            y=100 + i * 12,
+            interactive=True,
+        )
+        for i in range(1, count + 1)
+    ]
+    fields = [
+        element(900 + n, role=role, name=name, x=820.0, y=y, interactive=True)
+        for n, (role, name, y) in enumerate(
+            [
+                ("textbox", "To", 500.0),
+                ("textbox", "Subject", 540.0),
+                ("textbox", "Message Body", 580.0),
+                ("button", "Send", 720.0),
+            ]
+        )
+    ]
+    indexed, _ = SoMIndexer().apply([*rows, *fields])
+    return indexed
+
+
+_COMPOSE_FOCUS = (810.0, 480.0, 340.0, 300.0)
+
+
+def test_a_focus_box_hard_caps_whats_outside_it_even_at_the_default_budget():
+    """The actual regression: priority alone left ~99 of 140 background rows visible at
+    the default budget, because the dialog's own fields cost so little that most of the
+    budget was never spent. A separate, small allowance for everything outside the box is
+    what turns "wins a tie-break" into "is mostly absent" — see B3 in
+    docs/IMPROVEMENT-PLAN.md.
+    """
+    listed, dropped = ReadingOrderFormatter().apply(
+        _inbox_and_compose(), viewport_height=VIEWPORT_H, focus_box=_COMPOSE_FOCUS
+    )
+
+    compose_names = {"To", "Subject", "Message Body", "Send"}
+    survived = [e for e in listed if e.name not in compose_names]
+
+    assert compose_names <= {e.name for e in listed}, "the dialog itself must stay intact"
+    assert len(survived) < 20, f"{len(survived)} background rows still visible while composing"
+    assert dropped > 100
+
+
+def test_without_a_focus_box_the_default_budget_is_unaffected():
+    """No dialog open -> ordinary browsing and triage must see exactly what they always
+    did. The cap is scoped to `focus_box is not None`, not to element count or budget."""
+    without_dialog = [e for e in _inbox_and_compose() if e.name not in {
+        "To", "Subject", "Message Body", "Send"
+    }]
+
+    listed, _ = ReadingOrderFormatter().apply(
+        without_dialog, viewport_height=VIEWPORT_H, focus_box=None
+    )
+
+    assert len(listed) > 100, "background rows must not be capped with no focus box active"
+
+
+def test_the_outside_cap_never_touches_elements_inside_the_box():
+    """A large focus region containing many elements must not have ITS OWN contents capped
+    by the outside allowance — only what is genuinely outside the box is limited."""
+    many_fields = [
+        element(900 + n, role="textbox", name=f"field {n}", x=820.0, y=480.0 + n * 20,
+                interactive=True)
+        for n in range(30)
+    ]
+    indexed, _ = SoMIndexer().apply(many_fields)
+
+    listed, dropped = ReadingOrderFormatter().apply(
+        indexed, viewport_height=VIEWPORT_H, focus_box=_COMPOSE_FOCUS
+    )
+
+    assert dropped == 0
+    assert len(listed) == 30

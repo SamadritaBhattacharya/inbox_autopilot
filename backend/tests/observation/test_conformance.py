@@ -54,6 +54,7 @@ def run(case: dict) -> dict:
         for e in case["elements"]
     ]
     m = case["meta"]
+    focus = m.get("focusBox")
     observation, _geometry, _report = funnel.run(
         elements,
         PageMeta(
@@ -67,6 +68,18 @@ def run(case: dict) -> dict:
             thread_ref=m["threadRef"],
             unread_count=m["unreadCount"],
             compose_open=m["composeOpen"],
+            # These four were missing entirely — every fixture's `focusBox`,
+            # `toFilled`/`subjectFilled`/`bodyFilled` was silently ignored, so no case
+            # file could ever have exercised focus-box behaviour through this harness
+            # regardless of what its `meta` claimed. See B3 in docs/IMPROVEMENT-PLAN.md.
+            #
+            # `focusBox` is a 4-element ARRAY in the fixture, not `{x,y,width,height}`:
+            # the TS conformance test casts `meta` straight to `PageMeta`, whose
+            # `focusBox` is a tuple — an object here would throw on that side.
+            to_filled=bool(m.get("toFilled", False)),
+            subject_filled=bool(m.get("subjectFilled", False)),
+            body_filled=bool(m.get("bodyFilled", False)),
+            focus_box=tuple(focus) if focus else None,
         ),
     )
     return json.loads(observation.model_dump_json(by_alias=True))

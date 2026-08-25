@@ -24,6 +24,7 @@ from app.manager.slots import (
     confidence,
     is_ready,
     missing_slots,
+    outstanding_slots,
     question_for,
 )
 from app.prompts import load_prompt
@@ -240,9 +241,9 @@ def build_context_gate_node(*, threshold: float = 0.85, max_asks: int = MAX_ASKS
         # here rather than acted on.
         if state.answers and state.pending_question:
             latest = state.answers[-1]
-            intent = intent.with_slots(**{name: latest for name in missing_slots(intent)})
+            intent = intent.with_slots(**{name: latest for name in outstanding_slots(intent)})
 
-        outstanding = missing_slots(intent)
+        outstanding = outstanding_slots(intent)
         score = confidence(intent)
 
         if is_ready(intent, threshold=threshold):
