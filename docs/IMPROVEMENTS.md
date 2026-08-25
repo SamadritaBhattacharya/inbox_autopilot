@@ -203,9 +203,9 @@ thinks, not whether it survives.
 | 13 | ~~**Ambiguity is resolved in the loop, not in PRE**~~ **DONE** — conditional slots resolve it in `context_gate`; the worker gets a concrete instruction, never a decision | Cannot ask "together or separately?" | B2 |
 | 14 | ~~**The funnel is not scoped to the active region**~~ **DONE** — a focus box already won priority ties; it now gets its own hard cap, since ties rarely fired on a real inbox | 120 inbox rows sent while composing | B3 |
 | 15 | ~~**~900 tokens of prompt scar tissue**~~ **DONE** — cut to 327 (64%); every removal checked against what code now actually enforces, not by feel | Slow, expensive, and dilutes every other rule | B4 |
-| 16 | **No procedural memory** | Re-derives where Send is on every single run | B5 |
+| 16 | ~~**No procedural memory**~~ **PARTIAL** — the store exists (`app/surface/memory.py`, 26 tests, all five rules); nothing calls it yet, because wiring it needs a live browser this session doesn't have | Re-derives where Send is on every single run | B5 |
 | 17 | **Recovery strategies are hand-ranked, never learned** | Self-healing does not heal better over time | B6 |
-| 18 | **The feedback loop is built but not closed** — `ENDORSEMENT` is never recorded, `RuleCandidate` is computed and never read, nothing asks how a run went | It only learns from complaints, and never from what worked | B7 |
+| 18 | ~~**The feedback loop is built but not closed**~~ **DONE** — approve/edit/reject now file endorsement/correction/rejection; rule candidates reach the cockpit at run end; `RUN_RATING` records a verdict on a whole run (the cockpit does not yet *ask* for one) | It only learns from complaints, and never from what worked | B7 |
 | 19 | **Assessments are recorded but change nothing** | `NO_EFFECT` is spotted and then repeated until a guard fires | B8 |
 | 20 | **Reliability and latency are adjectives, not numbers** — `latency_ms` is captured and never reported | No way to notice a regression | B9 |
 | 21 | **Prompt caching is marked but not wired** — `Message.cacheable=True` is set on every system message across all six LLM-calling nodes and read by nothing; CLAUDE.md §14 names it as a primary free-tier mitigation | The gateway's own documented cost lever may not be doing anything | — |

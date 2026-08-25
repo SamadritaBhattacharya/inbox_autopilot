@@ -35,7 +35,10 @@ export type Entry =
   /** The human pressed Stop. Distinct from `finalize`, which is the agent concluding. */
   | { kind: "stopped" }
   /** A model provider was rate-limited or fell through. Not a failure — an explanation. */
-  | { kind: "provider"; provider: string; status: string; detail: string };
+  | { kind: "provider"; provider: string; status: string; detail: string }
+  //: A preference stated often enough that the agent is offering to make it a standing
+  //: rule. A SUGGESTION only — accepting it is a separate, human action.
+  | { kind: "ruleCandidate"; suggestion: string; count: number };
 
 export type PendingApproval = {
   requestId: string;

@@ -76,6 +76,7 @@ class FeedbackStore(Protocol):
     async def pending(self, thread_id: str) -> list[Feedback]: ...
     async def mark_applied(self, thread_id: str) -> None: ...
     async def candidates(self) -> list[RuleCandidate]: ...
+    async def rating(self, thread_id: str) -> Feedback | None: ...
 
 
 class InMemoryFeedbackStore:
@@ -104,6 +105,20 @@ class InMemoryFeedbackStore:
             f.mark_applied() if f.is_human and not f.applied else f
             for f in self._by_thread[thread_id]
         ]
+
+    async def rating(self, thread_id: str) -> Feedback | None:
+        """The human's verdict on this run as a whole, if they gave one.
+
+        The LAST one wins: a user who rates, reconsiders, and rates again meant the second
+        answer. Returns `None` when nobody rated — which is the common case and must stay
+        distinguishable from a negative rating. "Nobody said" and "somebody said it was
+        bad" are different facts, and an evaluation that conflates them scores every
+        unattended run as a failure.
+        """
+        ratings = [
+            f for f in self._by_thread[thread_id] if f.kind is FeedbackKind.RUN_RATING
+        ]
+        return ratings[-1] if ratings else None
 
     async def candidates(self) -> list[RuleCandidate]:
         """Corrections repeated often enough to propose as rules.

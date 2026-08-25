@@ -218,6 +218,21 @@ function EntryRow({ entry }: { entry: Entry }) {
       );
     }
 
+    case "ruleCandidate":
+      // The end of the promotion path: a preference stated often enough that encoding it
+      // would stop the user repeating themselves. Deliberately a NOTE, not a prompt with
+      // buttons — accepting it writes a rule that changes future behaviour on a surface
+      // that sends email, and that deserves its own considered action rather than a
+      // reflexive click at the moment a run ends.
+      return (
+        <div className="rise mt-4 rounded-[--radius-card] border border-line bg-raised/40 px-4 py-3">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted">
+            noticed
+          </span>
+          <p className="mt-1 text-text">{entry.suggestion}</p>
+        </div>
+      );
+
     case "stopped":
       return (
         <div className="rise mt-4 rounded-[--radius-card] border border-line bg-raised/40 px-4 py-3">

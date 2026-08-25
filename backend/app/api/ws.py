@@ -31,6 +31,33 @@ logger = logging.getLogger(__name__)
 RUNS = RunManager()
 
 
+async def _offer_rule_candidates(run: Run, container: AppContainer) -> None:
+    """Surface any preference the user has now repeated often enough to be worth encoding.
+
+    `FeedbackStore.candidates()` has always computed these, and the suggestion text has
+    always been written — *"You've told me this 3 times — shall I make it a standing rule?"*
+    Nothing ever read it, so the promotion path this project's own docs describe stopped one
+    wire short of a human ever seeing it. This is that wire.
+
+    **A suggestion, never an application.** The event says what the system noticed; turning
+    it into a `Rule` still needs a person, exactly as `feedback/store.py` promises ("the
+    system proposes; the human disposes"). Nothing here touches `RulesStore`.
+
+    Best-effort: a run that just succeeded must not be reported as failed because a
+    nice-to-have suggestion could not be computed.
+    """
+    try:
+        candidates = await container.feedback.candidates()
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("could not compute rule candidates", exc_info=True)
+        return
+
+    # Only the strongest. `candidates()` returns them count-descending, and a run that ends
+    # with four suggestions stacked up gets none of them read.
+    for candidate in candidates[:1]:
+        await run.emitter.rule_candidate(candidate.suggestion, candidate.count)
+
+
 async def drive(run: Run, container: AppContainer, task: str, *, owner: str = "local") -> None:
     """Run the graph to completion, forwarding interrupts to the cockpit.
 
@@ -89,6 +116,10 @@ async def drive(run: Run, container: AppContainer, task: str, *, owner: str = "l
                     str(result.get("reason") or ""),
                     (code.value if (code := result.get("error_code")) else None),
                 )
+                # At the END of the run, never during it. A "shall I make this a rule?"
+                # prompt mid-flight competes for attention with the thing the user is
+                # actually watching, and the answer does not change this run's outcome.
+                await _offer_rule_candidates(run, container)
                 await emitter.run_complete(
                     success=result.get("success"), reason=result.get("reason")
                 )
@@ -240,11 +271,24 @@ async def ws_run(
                 text = str(message.get("text", "")).strip()
                 run = RUNS.get(viewing) if viewing else None
                 if run is not None and text:
+                    try:
+                        feedback_kind = FeedbackKind(message.get("kind", "correction"))
+                    except ValueError:
+                        # A newer cockpit naming a kind this backend does not have. Filing
+                        # it as a correction keeps the signal rather than dropping it, and
+                        # is the safe direction: a correction is only ever *shown* to the
+                        # model, never treated as consent for anything.
+                        feedback_kind = FeedbackKind.CORRECTION
                     await container.feedback.record(
                         Feedback(
                             thread_id=run.thread_id,
-                            kind=FeedbackKind(message.get("kind", "correction")),
+                            kind=feedback_kind,
                             text=text,
+                            # A verdict on a finished run is a LABEL, not an instruction.
+                            # Left pending it would sit in `pending()` and be replayed to
+                            # the model as fresh guidance if the thread ever resumed —
+                            # feeding "that run went badly" back in as something to act on.
+                            applied=feedback_kind is FeedbackKind.RUN_RATING,
                         )
                     )
                     await run.emitter.feedback_ack(text)

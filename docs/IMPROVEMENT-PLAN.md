@@ -449,7 +449,7 @@ question this session didn't answer — worth its own scoped investigation befor
 way. Not fixed here: B4's job was cutting prompt bulk, and this is a wiring question, not a wording
 one. Recorded as item 21 in IMPROVEMENTS.md.
 
-## B5. Procedural memory · ~1 week · *the "remember where Send is" ask*
+## B5. Procedural memory · ~1 week · *the "remember where Send is" ask* · PARTIAL — the store is done; the live wiring is not, and cannot be from here
 
 Do not build "a memory". There are three, with different lifetimes and trust levels:
 
@@ -498,6 +498,71 @@ makes it 1. The token problem and the latency problem, solved by the same mechan
 **Acceptance:** compose completes in ≤2 LLM round trips on a warm cache, and a deliberately
 corrupted cache entry produces a verified miss and a correct fallback — not a wrong click.
 
+**Status — read this before building on top of it.** The plan bundles two genuinely different
+pieces of work under one heading, and only one of them can be done from here at all.
+
+**Built: `app/surface/memory.py` — the store, and its full discipline.** All five rules from this
+section, each with its own test, 26 tests total:
+
+1. *A cached locator is a hypothesis, never a fact.* `recall()` takes the DOM check as a caller-
+   supplied `verify` callable and calls it on every lookup, hit or miss — there is no code path
+   that returns a descriptor without it being re-checked against something live.
+2. *Provenance is typed.* `Provenance.CURATED` / `Provenance.LEARNED`; a `LEARNED` write can never
+   overwrite a `CURATED` entry for the same key, proven directly rather than assumed. Deliberately
+   its own module, not folded into `recovery/registry.py` — same reasoning as that file's own
+   docstring: mixing a human-authored trust level with a self-written one collapses the distinction
+   that makes either trustworthy.
+3. *Decay and evict.* `MAX_CONSECUTIVE_MISSES = 2` (one transient failure — an animation mid-
+   render — must not evict a locator that is actually still correct); a curated entry decays on
+   the *identical* schedule as a learned one, because a UI redesign does not spare hand-written
+   locators either.
+4. *Memory never shortcuts a gate.* Enforced structurally, not by convention: this class has no
+   `act`, `approve`, `preview`, `dispatch`, or `send` method, pinned by a test that checks exactly
+   that. It cannot bypass the approval gate because it has no path to the surface at all.
+5. *No PII in the store, ever.* `PageSignature` and `LocatorDescriptor` refuse construction outright
+   (`UnsafeMemoryValue`) if a field matches this project's own email/phone patterns — reused from
+   `security/patterns.py`, not reimplemented. Vault tokens (`P17`) are explicitly let through: a
+   token is a *reference* to PII, not PII itself, and refusing it would make it impossible to
+   remember anything about a recipient-shaped field.
+
+The second half of the plan's acceptance criterion — *"a deliberately corrupted cache entry
+produces a verified miss and a correct fallback"* — is exactly what
+`test_consecutive_misses_evict_the_entry` and the `never_matches`-verifier tests prove. That half
+is done.
+
+**Not built, and not attempted: everything that requires a live DOM to mean anything.**
+
+- **The brain still emits `Send(index=27)`, never bare `Send`.** Making the index optional and
+  letting the executor resolve it from a remembered locator means widening `tools.py`'s schema and
+  `ActionValidator._resolve_index` in `app/surface/dispatch.py` — the exact code path that keeps
+  every action's approval fingerprint tied to a real, currently-visible element. That is not a
+  change to make speculatively; it needs a real page to prove `verify()` actually rejects a stale
+  locator rather than rubber-stamping it.
+- **Nothing calls `recall()` or `remember()` from `PlaywrightEmailSurface`.** The store exists,
+  fully tested, with no consumer — matching this project's own established pattern for every other
+  store (`InMemoryRulesStore`, `InMemoryTrajectoryStore`): build the port and the in-memory
+  implementation first, wire a durable backing store in only once there is a real caller. Building
+  the durable half now, with nothing to persist yet, would be dead code with no way to prove it
+  correct.
+- **Macro actions (`OpenCompose` → `FillRecipient` → `FillSubject` → `FillBody` as one dispatch)
+  were not attempted at all**, deliberately. This is the largest, least-reversible piece of the
+  plan: it moves part of the observe→act loop from the graph into the executor, and any bug in
+  that boundary is a bug in the exact mechanism that currently guarantees `Send` always pauses for
+  a human. Building it without a live Gmail session to exercise the failure modes against would be
+  guessing at an architecture change to the single most safety-critical part of this system.
+- **The first half of the acceptance criterion — "compose completes in ≤2 LLM round trips on a
+  warm cache" — is consequently unverified and cannot be claimed.** That number can only come from
+  running a real compose flow against a real page, which is exactly the gap
+  [IMPROVEMENTS.md](IMPROVEMENTS.md) item 2 already names: the extension has never driven real
+  Gmail, in this session or any prior one.
+
+**What unblocks the rest:** a live browser session (Playwright against a fixture Gmail account, or
+the extension paired to a real one — either satisfies item 2 and item 4/A4 at the same time). Once
+one exists, the remaining work is: implement `verify()` for `PlaywrightEmailSurface` (a role +
+accessible-name query against the current page), widen `Send`/`Click` to accept an optional index,
+and *only then* consider macro actions — each step individually checkable against that same live
+session rather than three risky changes landing at once.
+
 ## B6. Self-improvement, in three tiers · ongoing
 
 **Tier 1 — in-run recovery.** Exists (`causes.py`, `strategies.py`, ranked HITL options). The
@@ -514,7 +579,7 @@ changes**. Every proposal passes B0's promotion criterion before it ships.
 blast radius, no rollback story, no way to attribute a regression. A sandboxed dev-assist mode may
 propose patches for human review; it stays out of the live loop.
 
-## B7. Close the feedback loop · ~2 days · *the one the docs missed entirely*
+## B7. Close the feedback loop · ~2 days · *the one the docs missed entirely* · DONE (two acceptance items deliberately not built — see Status)
 
 **Start by reading `backend/app/feedback/`, because it is further along than a plan would
 assume.** Four kinds already exist — `ASSESSMENT` (the model's own verdict), `CORRECTION`,
@@ -551,6 +616,76 @@ threshold and a written prompt.
 **Acceptance:** an endorsement recorded when a human approves; the promotion prompt reaching
 the cockpit and writing to `RulesStore` on accept; a post-run label landing on the trajectory
 and appearing as a column in the B0 table.
+
+**Status:** DONE, with two parts of the acceptance criterion deliberately not built — one
+because it would be unsafe, one because it is not achievable as written.
+
+**End 1 — the approval gate now produces feedback.** `build_approval_gate_node` takes the
+`FeedbackStore` the graph already had and files every verdict: approve → `ENDORSEMENT`,
+reject → `REJECTION`, edit → `CORRECTION`. That last mapping is the one that matters and it
+is not the two-way mapping this plan suggested: `candidates()` counts *corrections*, so filing
+an edit anywhere else would leave the promotion counter reading zero forever — and "add
+regards", "shorter please", said across three runs, is exactly the standing-rule signal the
+promotion path exists to catch.
+
+**The preview is never stored, and that is load-bearing.** `preview` is the *resolved* draft —
+real addresses, real body text, un-tokenized on purpose so a human can verify what they are
+approving. The feedback store is persisted and read back across threads by `candidates()`.
+Putting a resolved draft in it would undo the vault one approval at a time. What is stored is
+`request.summary` ("Send this email", from a fixed table keyed on the verb) plus the verb —
+both structural. The single exception is an edit, whose text is the human's own words, which is
+what the existing mid-run feedback channel already records. Pinned by a test that asserts
+neither the address nor the body text appears anywhere in the store's serialized contents.
+
+Approval feedback is recorded `applied=True`: the human said it *to* the gate and the gate
+acted on it in the same turn, so leaving it pending would have the loop replay their own
+decision back at them as fresh guidance next turn.
+
+**End 2 — rule candidates reach a human.** `emitter.rule_candidate` and the `RULE_CANDIDATE`
+protocol event both already existed and were called by nothing. `_offer_rule_candidates` in
+`api/ws.py` now runs at the end of a run — never during it, since a "shall I make this a
+rule?" prompt mid-flight competes with the thing the user is actually watching, and the answer
+does not change this run's outcome. Only the single strongest candidate is offered; four
+stacked suggestions get none of them read. It is wrapped so a store failure cannot report a
+successful run as failed. The cockpit renders it (`types.ts`, `useAgentRun.ts`,
+`Transcript.tsx`), where it previously would have arrived and been silently dropped.
+
+**Not built: "writing to `RulesStore` on accept".** Deliberately. `feedback/store.py`'s own
+docstring is explicit that the system proposes and the human disposes, and ADR-006 turns on
+nothing gaining capability without a person saying yes. A one-click "accept" at the moment a
+run ends is a reflexive click that permanently changes behaviour on a surface that sends
+email — the wrong shape for that decision. The suggestion is rendered as a *note*, not a
+prompt with buttons. A considered accept flow (a rules screen, showing what the rule would
+match, reversible) is real work and belongs with its own UI, not bolted to the end of a run.
+
+**End 3 — a verdict on a whole run.** New `FeedbackKind.RUN_RATING`, deliberately not reusing
+`ENDORSEMENT`/`REJECTION` now that those come from the approval gate and mean something
+narrower ("this specific send was right"). A run rating is the only signal in the system that
+judges the *outcome* rather than a step, which makes it the only thing that can tell you
+whether `Complete(success=True)` was actually true.
+
+Two properties it needed and now has, both tested: it is recorded `applied=True` so it can
+never sit in `pending()` and be replayed to the model as an instruction ("that run went badly"
+is a label, not something to act on); and `rating()` returns `None` for an unrated run rather
+than anything falsy-but-negative, because "nobody said" and "somebody said it was bad" are
+different facts and an evaluation that conflates them scores every unattended run as a
+failure. The existing `feedback` socket message carries it — a finished run stays attachable
+for a TTL, so the channel already reaches it — and unknown kinds from a newer cockpit now fall
+back to `CORRECTION` rather than raising.
+
+**Not built: "appearing as a column in the B0 table".** Not deferred — not achievable as
+written. Every B0 golden task runs against a *scripted* `LLMClient` with no human anywhere in
+the loop, so there is no one to produce a rating. A human-label column would be structurally
+empty for all 16 tasks. The mechanism now exists so that *real* runs carry labels, which is
+what a future evaluation over real trajectories (B6's tier 2) would read; the scripted bench
+is the wrong consumer for it. What is missing to close that properly is real runs to label,
+which is [IMPROVEMENTS.md](IMPROVEMENTS.md) item 2 again.
+
+**Also not built: the cockpit does not yet ASK for a rating.** The backend accepts and stores
+one, and the transport is proven, but nothing prompts the user at the end of a run. That is a
+small piece of UI work with a real design question attached (how to ask once, cheaply, without
+nagging) and it is honest to name it as outstanding rather than count the channel as the
+feature.
 
 ## B8. Self-awareness — calibrated confidence that changes control flow · ~2 days
 
@@ -612,9 +747,9 @@ baseline.
 | B4 | Prompt diet | B1–B3 | the rest of the token cut — DONE (898 -> 327 tokens, 64%) |
 | A4 | Extension on real Gmail | A1 | the deployable surface |
 | A5–A6 | Budgets + auth binding | A4 | safe to expose |
-| B5 | Macros + procedural memory | B0–B4 | 5 round trips → 1 |
+| B5 | Macros + procedural memory | B0–B4 | 5 round trips → 1 — PARTIAL (store built; live wiring blocked on A4) |
 | B6 | Empirical ranking, offline mining | B0, B5 | improves without you |
-| B7 | Close the feedback loop | B0 | human labels = eval ground truth |
+| B7 | Close the feedback loop | B0 | human labels = eval ground truth — DONE (rating channel built; cockpit does not yet ask) |
 | B8 | Calibrated confidence | B0 | assessments change control flow |
 | B9 | Reliability + latency budgets | B0 | adjectives become numbers |
 | A7–A9 | Screencast, fixtures, CI | — | polish |

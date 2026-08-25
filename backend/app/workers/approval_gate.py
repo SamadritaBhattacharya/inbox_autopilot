@@ -14,6 +14,8 @@ from langgraph.types import interrupt
 
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
+from app.feedback.models import Feedback, FeedbackKind
+from app.feedback.store import FeedbackStore
 from app.llm.base import Message
 from app.manager.draft import Draft
 from app.surface.base import EmailSurface
@@ -28,6 +30,78 @@ logger = logging.getLogger(__name__)
 #: the capability rather than on the writer module.
 Reviser = Callable[[Draft, str], Awaitable[Draft]]
 
+#: Which feedback kind each verdict is. The gate is the only place in the system where a
+#: human passes explicit judgement on a *specific proposed action*, which makes it the
+#: richest signal available — and until now the only one that was thrown away.
+#:
+#: EDIT maps to CORRECTION rather than to its own kind deliberately: `FeedbackStore.
+#: candidates()` counts CORRECTIONs to find recurring preferences, and "add regards",
+#: "shorter please", "don't cc them" said across three different runs is *exactly* the
+#: standing-rule signal that promotion path exists to catch. Filing edits anywhere else
+#: would leave the promotion counter reading zero forever.
+_KIND_FOR_VERDICT: dict[Verdict, FeedbackKind] = {
+    Verdict.APPROVE: FeedbackKind.ENDORSEMENT,
+    Verdict.EDIT: FeedbackKind.CORRECTION,
+    Verdict.REJECT: FeedbackKind.REJECTION,
+}
+
+
+async def _record(
+    feedback: FeedbackStore | None,
+    state: AgentState,
+    decision,
+    summary: str,
+) -> None:
+    """File the human's verdict as feedback. Best-effort, and never with the preview in it.
+
+    **The preview must not be stored, and this is the whole reason this is a function rather
+    than three inline calls.** `preview` is the RESOLVED draft — real addresses, real body
+    text, deliberately un-tokenized so a human can actually verify what they are approving.
+    It is built for one authenticated cockpit and one pair of eyes. The feedback store is a
+    persisted, cross-run, cross-thread surface that `candidates()` reads back out. Putting a
+    resolved draft in there would quietly undo the vault one approval at a time.
+
+    So what gets stored is `request.summary` — "Send this email", from a fixed table in
+    `approval.py` keyed on the verb — plus the verb itself. Both are structural. The one
+    exception is EDIT, whose text is the human's own instruction: that is their words, it is
+    what the promotion path needs to count, and it is exactly what the existing mid-run
+    feedback channel in `api/ws.py` already records.
+
+    A failure here must never take down a run that a human just successfully approved, so it
+    is logged and swallowed. Losing a learning signal is a bad day; losing the send the user
+    just authorised is a broken product.
+    """
+    if feedback is None:
+        return
+
+    kind = _KIND_FOR_VERDICT.get(decision.verdict)
+    if kind is None:  # EXPIRED — nobody decided anything, so there is nothing to learn
+        return
+
+    if kind is FeedbackKind.CORRECTION:
+        text = decision.edit.strip()
+    else:
+        text = (decision.reason or "").strip() or summary
+    if not text:
+        return
+
+    try:
+        await feedback.record(
+            Feedback(
+                thread_id=state.thread_id,
+                kind=kind,
+                text=text,
+                step=state.step,
+                action=state.last_action.name if state.last_action else None,
+                # Already delivered: the human said it TO the gate, and the gate has acted
+                # on it in this same turn. Leaving it pending would have the loop replay
+                # their own decision back at them as fresh guidance next turn.
+                applied=True,
+            )
+        )
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("could not record approval feedback", exc_info=True)
+
 
 def build_approval_gate_node(
     surface: EmailSurface,
@@ -35,6 +109,7 @@ def build_approval_gate_node(
     *,
     timeout_seconds: int = 600,
     revise: Reviser | None = None,
+    feedback: FeedbackStore | None = None,
 ):
     """Pause for a human before anything irreversible.
 
@@ -84,6 +159,7 @@ def build_approval_gate_node(
         )
         decision = decision_from(raw)
         await emitter.approval_result(request.request_id, decision.verdict.value)
+        await _record(feedback, state, decision, request.summary)
 
         # The deadline is enforced by the transport, which is where the waiting actually
         # happens. It cannot be enforced here: this node re-executes on resume, so

@@ -310,6 +310,13 @@ function toTimeline(events: AgentEvent[], task?: string): Entry[] {
           detail: str(data.detail),
         });
         break;
+      case "rule_candidate":
+        entries.push({
+          kind: "ruleCandidate",
+          suggestion: str(data.suggestion),
+          count: Number(data.count) || 0,
+        });
+        break;
       case "run_complete":
         // Only when a human stopped it. Every other ending already rendered its own
         // `finalize` card, and a second "it ended" row under it reads like a bug.

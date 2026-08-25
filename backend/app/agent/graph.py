@@ -277,6 +277,10 @@ def build_manager_graph(
                 # So "change the last sentence" edits that sentence instead of
                 # regenerating the whole email.
                 revise=build_reviser(llm, emitter),
+                # Approve/edit/reject are the only place a human judges a SPECIFIC
+                # proposed action. Recording them is what gives the promotion path
+                # anything to count.
+                feedback=feedback,
             ),
         )
 

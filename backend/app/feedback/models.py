@@ -35,6 +35,14 @@ class FeedbackKind(StrEnum):
     ENDORSEMENT = "endorsement"
     #: A human declining a proposed irreversible action.
     REJECTION = "rejection"
+    #: A human's verdict on a WHOLE RUN, given once after it ends.
+    #:
+    #: Deliberately not reusing ENDORSEMENT/REJECTION, which now also come from the approval
+    #: gate and mean something narrower: "this specific send was right". A run rating is the
+    #: only signal in the system that judges the outcome rather than a step, which makes it
+    #: the one thing that can tell you whether `Complete(success=True)` was *true* — the
+    #: agent's own verdict is otherwise the agent grading its own homework.
+    RUN_RATING = "run_rating"
 
 
 class Outcome(StrEnum):
