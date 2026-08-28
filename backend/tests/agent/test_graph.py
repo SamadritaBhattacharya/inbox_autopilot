@@ -123,8 +123,20 @@ async def test_the_pause_survives_a_rebuilt_graph():
 
 
 async def test_the_gate_gives_up_typed_rather_than_asking_forever():
-    """A gate that can ask forever can hang a run forever."""
-    llm = FakeLLMClient([intake_reply("send_email", confidence=0.1)] * 8)
+    """A gate that can ask forever can hang a run forever.
+
+    Driven with `unknown`, which is the case that genuinely cannot be talked into clarity:
+    `confidence` is hardcoded to 0 for an unclassified request, so no answer raises it and
+    the ask budget is the only thing that ends the run.
+
+    This used to use `send_email` at confidence 0.1, and that scenario no longer fails —
+    deliberately. A human who answers a question framed around sending an email has told us
+    what the task is, so the gate now proceeds instead of refusing three times and dying
+    with `missing: .` and nothing missing. That livelock is the bug this suite gained
+    `test_answering_a_confirmation_grounds_the_action` for; the give-up path is still
+    required and is still exactly what this test covers.
+    """
+    llm = FakeLLMClient([intake_reply("unknown", confidence=0.1)] * 8)
     graph = build_manager_graph(llm=llm, rules=NoRules())
 
     await drive(graph, "do something with email")
@@ -136,6 +148,57 @@ async def test_the_gate_gives_up_typed_rather_than_asking_forever():
     assert result["status"] == "failed"
     assert result["error_code"] == ErrorCode.CONTEXT_INCOMPLETE
     assert result["finished"] is True
+
+
+async def test_answering_a_confirmation_grounds_the_action():
+    """The livelock this suite exists to prevent, end to end.
+
+    `confidence` is `action_confidence × (slots filled)`, so its ceiling is whatever the
+    classifier emitted. A clear "write a good evening motivation email" scored 0.80 against
+    a 0.85 bar; the recipient answer filled the last slot, the score sat at its 0.80 ceiling,
+    and three further answers moved nothing. The run died `CONTEXT_INCOMPLETE` reporting
+    `missing: .` — with nothing missing and nothing the human could type to fix it.
+    """
+    llm = FakeLLMClient(
+        [
+            intake_reply("send_email", confidence=0.8, body_intent="motivation"),
+            ok("decision"),
+            ok("Compose\nSend"),
+            drafted(),
+        ]
+    )
+    graph = build_manager_graph(llm=llm, rules=NoRules())
+
+    paused = await drive(graph, "write a good evening motivation email")
+    assert "__interrupt__" in paused
+
+    # The recipient. Fills the last missing slot — confidence is still capped at 0.80.
+    still_paused = await graph.ainvoke(Command(resume="priya@corp.com"), run_config())
+    assert "__interrupt__" in still_paused, "the recipient alone should not clear the gate"
+
+    # Nothing is missing now, so this question is about the ACTION — and it must NAME it,
+    # or there is no answer that can resolve anything.
+    question = still_paused["__interrupt__"][0].value["question"]
+    assert "send an email" in question
+
+    final = await graph.ainvoke(Command(resume="yes"), run_config())
+
+    assert "__interrupt__" not in final, "answering must break the loop, not extend it"
+    assert final["status"] == "done"
+
+
+async def test_saying_NO_to_a_confirmation_does_not_ground_the_action():
+    """Reading a refusal as consent would take "no, not an email" and compose one."""
+    llm = FakeLLMClient([intake_reply("send_email", confidence=0.8, body_intent="x")] * 8)
+    graph = build_manager_graph(llm=llm, rules=NoRules())
+
+    await drive(graph, "write something", thread_id="no-1")
+    result = await graph.ainvoke(
+        Command(resume="priya@corp.com"), run_config("no-1")
+    )
+    result = await graph.ainvoke(Command(resume="no, that is not it"), run_config("no-1"))
+
+    assert "__interrupt__" in result, "a refusal must not clear the gate"
 
 
 async def test_an_unparseable_classification_asks_instead_of_crashing():

@@ -183,3 +183,68 @@ def test_the_open_window_is_announced_on_its_own_line():
     )
 
     assert "ALREADY OPEN" in observation_block(state)
+
+
+# ── the card must DESCRIBE the send, not the click ──────────────────────────
+
+
+def test_a_send_click_is_described_as_a_send_not_a_bulk_change():
+    """Gating went consequence-based when `Click` on Gmail's Send button turned out to send
+    mail; the CARD was left on the old verb-name test. The result was an approval prompt for
+    the most irreversible thing this product does, headed "About to make a BULK CHANGE — Run
+    Click". A person cannot approve what the card will not name."""
+    from app.workers.approval import build_request
+
+    request = build_request(
+        click(SEND_INDEX),
+        request_id="ap-1",
+        preview="To: a@b.com\nSubject: Hi\n\nbody",
+        timeout_seconds=600,
+        observation=compose_view(),
+    )
+
+    assert request.kind == "send"
+    assert request.summary == "Send this email"
+
+
+def test_an_ordinary_click_is_still_described_honestly():
+    """The counterfactual: this must not relabel every click as a send."""
+    from app.workers.approval import build_request
+
+    request = build_request(
+        click(7),  # Save draft
+        request_id="ap-2",
+        preview="whatever",
+        timeout_seconds=600,
+        observation=compose_view(),
+    )
+
+    assert request.kind == "bulk"
+
+
+def test_ctrl_enter_is_described_as_a_send():
+    from inbox_contracts import ActionCall
+
+    from app.workers.approval import build_request
+
+    request = build_request(
+        ActionCall(name="PressKey", args={"key": "Control+Enter"}),
+        request_id="ap-3",
+        preview="To: a@b.com\n\nbody",
+        timeout_seconds=600,
+        observation=compose_view(),
+    )
+
+    assert request.kind == "send"
+
+
+def test_no_observation_falls_back_to_the_honest_wording():
+    """Without an observation there is no way to know what a click targets, and claiming
+    "send" would be inventing certainty."""
+    from app.workers.approval import build_request
+
+    request = build_request(
+        click(SEND_INDEX), request_id="ap-4", preview="x", timeout_seconds=600
+    )
+
+    assert request.kind == "bulk"

@@ -26,6 +26,7 @@ from app.recovery.causes import Cause, Diagnosis, classify
 from app.recovery.registry import CuratedSkillRegistry
 from app.recovery.strategies import freeform_guidance
 from app.telemetry.records import ErrorCode, StepRecord
+from app.workers.irreversible import is_irreversible
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,23 @@ def build_verify_node(emitter: EventEmitter):
             # The agent said so itself. Believe it, and let diagnose explain why.
             return {}
 
+        # An irreversible action the EXECUTOR confirmed is not re-litigated here.
+        #
+        # `_do_send` reports success only after watching the compose dialog close — evidence
+        # from the browser itself, at the moment it happened. This node reads
+        # `state.observation`, which is the view from BEFORE the action, because a run that
+        # finished at `act` never re-observed. So it saw `view: compose`, concluded the mail
+        # had not gone, and reported a failure for a message that was already sent.
+        #
+        # Stale evidence must not overturn direct evidence. When the surface confirmed it,
+        # believe it.
+        if (
+            state.last_result is not None
+            and state.last_result.success
+            and is_irreversible(state.last_action, state.observation)
+        ):
+            return {"success": True, "status": "done"}
+
         intent = state.intent
         if intent is None:
             return {"success": bool(state.success)}
@@ -60,10 +78,18 @@ def build_verify_node(emitter: EventEmitter):
             # successful send from inside the loop.
             reached = observation.mail.view in (expected_view, "inbox")
             if not reached:
-                await emitter.error("the message does not appear to have been sent")
+                # Typed, like every other failure. Without a code this reached the human
+                # as "Send failed with no code" — the one thing CLAUDE.md §11 says a
+                # terminal state may never be, because an untyped exit cannot be counted,
+                # diagnosed, or turned into a ranked remedy.
+                await emitter.error(
+                    "the message does not appear to have been sent",
+                    ErrorCode.SEND_UNVERIFIED.value,
+                )
                 return {
                     "success": False,
                     "status": "failed",
+                    "error_code": ErrorCode.SEND_UNVERIFIED,
                     "reason": "I could not confirm the message was actually sent.",
                 }
 

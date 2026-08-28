@@ -108,6 +108,24 @@ class ThreadedSurface:
     async def act(self, call: ActionCall) -> ActionResult:
         return await self._loop.call(self._surface.act(call))
 
+    async def preview(self, call: ActionCall) -> str:
+        """The fourth port method, and the one whose absence broke every send on Windows.
+
+        `preview` reads the LIVE compose fields, so it touches Playwright and has to hop
+        onto the browser loop exactly like `observe` and `act`. It was simply never added
+        here: the approval gate called it, this proxy did not have it, and every gated
+        action died with `AttributeError` at the moment a human was about to be shown what
+        they were approving.
+
+        Nothing caught it because the only surface the tests drive is `FakeEmailSurface`,
+        which does implement `preview` — and this wrapper exists only on the Windows path
+        (a selector event loop cannot spawn subprocesses), which no test exercises.
+        `tests/surface/test_browser_thread.py` now checks this proxy against the port
+        itself, so a fifth method added to `EmailSurface` fails loudly here rather than at
+        the approval gate on somebody's real mailbox.
+        """
+        return await self._loop.call(self._surface.preview(call))
+
     async def start_screencast(self, on_frame: Any, **kwargs: Any) -> None:
         """Frames are produced on the browser loop and consumed on the server's.
 

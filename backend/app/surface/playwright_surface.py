@@ -130,6 +130,175 @@ _COMPOSE_FIELDS_JS = """
 """
 
 
+#: Finds a navigation entry in the sidebar by its visible name.
+#:
+#: Restricted to things that navigate — links and elements with a navigational role.
+#: Matching any element whose text says "Sent" would happily return a word inside a
+#: message, and clicking that does nothing while looking exactly like it worked.
+_SIDEBAR_JS = """
+(wanted) => {
+  const target = wanted.trim().toLowerCase();
+  const candidates = document.querySelectorAll(
+    'a[href], [role="link"], [role="menuitem"], [role="treeitem"], [role="tab"]'
+  );
+  for (const el of candidates) {
+    const box = el.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) continue;
+    const name = (
+      el.getAttribute('aria-label') || el.textContent || ''
+    ).trim().toLowerCase();
+    // Gmail appends unread counts: "Spam 4", "Inbox 1,234". Strip a trailing count
+    // so a folder does not become unfindable the moment it has unread mail in it.
+    const bare = name.replace(/[\\s,0-9]+$/, '');
+    if (name === target || bare === target) {
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }
+  }
+  return null;
+}
+"""
+
+
+#: Gmail's own locations for the folders it ships with.
+#:
+#: An ALLOWLIST, and that is the whole safety argument for having navigation at all. The
+#: `Navigate(url=...)` verb exists on this surface and is bound to no worker on purpose: an
+#: agent that reads attacker-controlled email must never be able to load an address that
+#: email chose, because that is a credential-harvest page one injected sentence away.
+#:
+#: Here the model supplies a NAME and this table supplies the location. Every value is a
+#: fragment of Gmail's own interface — nothing the model writes can become a destination,
+#: so the useful half of navigation survives and the dangerous half never exists.
+GMAIL_FOLDERS: dict[str, str] = {
+    "inbox": "#inbox",
+    "sent": "#sent",
+    "sent mail": "#sent",
+    "drafts": "#drafts",
+    "draft": "#drafts",
+    "spam": "#spam",
+    "junk": "#spam",
+    "trash": "#trash",
+    "bin": "#trash",
+    "deleted": "#trash",
+    "starred": "#starred",
+    "important": "#imp",
+    "snoozed": "#snoozed",
+    "scheduled": "#scheduled",
+    "all mail": "#all",
+    "all": "#all",
+    # "Archive" is not a folder in Gmail — archived mail simply leaves the inbox and stays
+    # in All Mail. Sending someone to All Mail is what they actually meant; refusing on a
+    # technicality would be pedantry with no upside.
+    "archive": "#all",
+    "archived": "#all",
+}
+
+
+#: Finds a mail row's action button once hovering has revealed the row toolbar.
+#:
+#: Coordinates cannot address these directly: the buttons do not exist until the pointer is
+#: over the row, so they are absent from the observation the agent chose an index from. The
+#: row's y IS known, though, so the button is identified by tooltip and then matched to the
+#: row it belongs to — which is what stops "Archive" archiving the row above.
+_ROW_ACTION_JS = """
+(args) => {
+  const selector = args.tooltips
+    .map((t) => `[data-tooltip="${t}"], [aria-label="${t}"]`)
+    .join(', ');
+
+  let best = null;
+  let bestDistance = Infinity;
+  for (const el of document.querySelectorAll(selector)) {
+    const box = el.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) continue;
+    const distance = Math.abs(box.top + box.height / 2 - args.y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = box;
+    }
+  }
+  // Must belong to THIS row. Without the band check the nearest match could be a toolbar
+  // button at the top of the page, and the action would land on the wrong thread.
+  if (!best || bestDistance > args.band) return null;
+  return { x: best.left + best.width / 2, y: best.top + best.height / 2 };
+}
+"""
+
+#: Half a mail row, near enough. Wide enough to catch a button whose centre sits a little
+#: off the row's own centre; narrow enough that the row above never wins.
+ROW_BAND_PX = 26
+
+
+#: How to reach each compose field WITHOUT coordinates.
+#:
+#: These are the same selectors the extractor uses to identify the fields, kept in step on
+#: purpose: the observation tells the agent "Subject is [80]", and this is how [80] is then
+#: actually reached. Matching them is what makes the promise true.
+#: Tried IN ORDER, one at a time — deliberately a tuple per field, never a comma-joined
+#: string.
+#:
+#: A comma-joined selector hands the choice to DOCUMENT ORDER: `page.focus('a, b')` focuses
+#: whichever matches first on the page, not whichever selector was listed first. Gmail lays
+#: the subject out above the body, so a body selector that also matched the subject sent the
+#: message text into the subject line — and a "To - Select contacts" LINK sits above the real
+#: recipient field, so a loose To fallback matched the link instead of the input.
+#:
+#: Both bugs were the same mistake: writing an ordered list and then throwing the order away.
+#: These MUST stay in step with `TO_SELECTORS`/`SUBJECT_SELECTORS`/`BODY_SELECTORS` in
+#: `surface/extract.py` — that file decides which index a field is reported at, this one
+#: decides where the typing goes, and a disagreement puts text in the wrong box.
+_FIELD_SELECTORS: dict[str, tuple[str, ...]] = {
+    "to": (
+        '[name="to"]',
+        'textarea[name="to"]',
+        '[role="combobox"][aria-label*="To" i]',
+        '[aria-label*="To recipients" i]',
+    ),
+    "subject": (
+        '[name="subjectbox"]',
+        '[name="subject"]',
+        '[aria-label*="Subject" i]',
+        '[placeholder*="Subject" i]',
+    ),
+    "body": (
+        '[g_editable="true"]',
+        '[aria-label*="Message Body" i]',
+        '[role="textbox"][aria-label*="Body" i]',
+        '[contenteditable="true"]:not([role="combobox"])',
+    ),
+}
+
+
+#: The addresses currently in the To field — committed chips AND loose typed text.
+#:
+#: Scoped to the recipients row, never the whole dialog: the FROM row carries the signed-in
+#: user's own address in the same attributes, and treating that as "already a recipient"
+#: would make it impossible to email yourself.
+_RECIPIENTS_JS = """
+() => {
+  const dialog = document.querySelector('[role="dialog"]');
+  if (!dialog) return { present: [], typed: '' };
+
+  const input = dialog.querySelector(
+    '[name="to"], textarea[name="to"], input[aria-label*="To" i]'
+  );
+  if (!input) return { present: [], typed: '' };
+
+  let area = input;
+  for (let i = 0; i < 4 && area.parentElement && area.parentElement !== dialog; i++) {
+    area = area.parentElement;
+  }
+
+  const present = [];
+  for (const el of area.querySelectorAll('[data-hovercard-id], [email]')) {
+    const value = el.getAttribute('data-hovercard-id') || el.getAttribute('email') || '';
+    if (value.includes('@')) present.push(value.trim().toLowerCase());
+  }
+  return { present, typed: ((input.value || '') + '').trim().toLowerCase() };
+}
+"""
+
+
 class PlaywrightEmailSurface:
     """`EmailSurface` over a Playwright page."""
 
@@ -342,7 +511,19 @@ class PlaywrightEmailSurface:
         autocompleted, or was edited by a take-over — and the whole value of the card is
         that the human sees what is really there.
         """
-        if call.name not in ("Send", "SendInvite"):
+        # By CONSEQUENCE, not by verb name — the same rule the GATE uses.
+        #
+        # Gating became consequence-based when `Click` on Gmail's Send button turned out to
+        # send mail just as surely as the `Send` verb. The preview was left behind on the
+        # old verb-name test, so exactly that action produced a card reading
+        # `Click(index=83)` — an approval prompt for the most irreversible thing this
+        # product does, showing the human a number instead of the email. Approving what you
+        # cannot read is not approval.
+        sends_mail = call.name in ("Send", "SendInvite") or (
+            is_irreversible(call, self._last_observation)
+            and getattr(getattr(self._last_observation, "mail", None), "compose_open", False)
+        )
+        if not sends_mail:
             return f"{call.name}({', '.join(f'{k}={v!r}' for k, v in call.args.items())})"
 
         try:
@@ -396,13 +577,132 @@ class PlaywrightEmailSurface:
         await self._page.mouse.click(x, y)
         return ActionResult(success=True, reason=f"clicked [{action.call.args.get('index')}]")
 
+    async def _already_addressed(self) -> set[str]:
+        """Addresses already in the To field, lowercased. Empty when it cannot be read.
+
+        Failing open is deliberate: this is a duplicate check, and a diagnostic query that
+        breaks must not block a recipient the user actually asked for.
+        """
+        try:
+            state = await self._page.evaluate(_RECIPIENTS_JS)
+        except Exception:  # page closed, navigating, no dialog
+            return set()
+        present = {a for a in state.get("present", []) if a}
+        typed = (state.get("typed") or "").strip()
+        if typed:
+            present.add(typed)
+        return present
+
+    def _compose_field_for(self, index: object) -> str | None:
+        """Which compose field this index was reported as, if any.
+
+        Read from the SAME observation the agent acted on, so the answer is exactly what it
+        was told — the index and the field agree by construction rather than by hope.
+        """
+        mail = getattr(self._last_observation, "mail", None)
+        if mail is None or not isinstance(index, int) or isinstance(index, bool):
+            return None
+        for name, reported in (
+            ("to", mail.to_index),
+            ("subject", mail.subject_index),
+            ("body", mail.body_index),
+        ):
+            if reported is not None and reported == index:
+                return name
+        return None
+
+    async def _focus_field(self, field: str) -> bool:
+        """Put the caret in a compose field by SELECTOR, never by coordinates.
+
+        **This is the fix for text landing in the wrong field**, and coordinates are the
+        whole reason it happened. Observed live: the agent was correctly told the subject
+        was at [80], we clicked [80]'s captured position — and between the observation and
+        the click, committing the recipient closed Gmail's autocomplete dropdown and the
+        dialog reflowed (the element count fell from 80 to 74). The subject had moved; the
+        body had slid up into those coordinates. "Good Evening" went into the body, the
+        subject stayed empty, and every confused turn afterwards followed from that.
+
+        No settle delay fixes this reliably — the page may reflow again at any moment, and a
+        coordinate is a bet that it will not. A selector names the field itself, so it is
+        correct however the layout moves. `focus()` also scrolls the field into view, which
+        removes a second class of failure: typing into something technically present but
+        off-screen.
+
+        Falls back to the caller's coordinate click when the selector finds nothing, so a
+        Gmail variant this does not recognise degrades to the old behaviour rather than
+        refusing to type at all.
+        """
+        for selector in _FIELD_SELECTORS[field]:
+            try:
+                await self._page.focus(selector, timeout=1500)
+                return True
+            except Exception:
+                continue
+        logger.debug("could not focus the %s field by any known selector", field)
+        return False
+
     async def _do_type(self, action: ResolvedAction) -> ActionResult:
         text = self._text_for(action)
-        if action.point is not None:
+        recipient_field = _is_recipient_arg(action)
+        field = self._compose_field_for(action.call.args.get("index"))
+
+        if recipient_field:
+            # ── the duplicate-recipient guard ──
+            #
+            # Observed live, twice, and it is not a reasoning failure the prompt can fix.
+            # Indices are rebuilt every turn by design, so the index the agent typed into
+            # last turn now points at something else entirely. Re-reading the new list it
+            # sees a "button" where it believes it put a recipient, concludes its own action
+            # failed, and types the address a second time — leaving a committed chip AND
+            # loose text, which is what the user sees in the compose window.
+            #
+            # The agent cannot verify this for itself: it is never shown field CONTENTS, so
+            # "is my recipient already there?" is genuinely unanswerable from its side. Only
+            # this side can answer it, so this is where the answer belongs — the same
+            # reasoning as `COMPOSE_ALREADY_OPEN`, and the same shape of fix.
+            #
+            # Refusing outright would break "also add Bob", so already-present addresses are
+            # DROPPED and only genuinely new ones are typed. Adding a recipient later works;
+            # adding the same one twice becomes impossible.
+            present = await self._already_addressed()
+            if present:
+                fresh = new_recipients(text, present)
+                if not fresh:
+                    token = action.call.args.get("recipient") or action.call.args.get("text")
+                    return ActionResult(
+                        success=False,
+                        reason=(
+                            f"{token} is already in the To field — nothing to add. The "
+                            "recipient is done; move on to the subject or the body."
+                        ),
+                        error_code="RECIPIENT_ALREADY_PRESENT",
+                    )
+                text = ", ".join(fresh)
+
+        # A known compose field is reached by selector; anything else still goes by the
+        # index the agent was given.
+        if field:
+            if not await self._focus_field(field):
+                # Refuse rather than fall back to a coordinate click.
+                #
+                # The fallback is what put the message body into the subject line: unable to
+                # reach the body by selector, it clicked the body's coordinates, the caret
+                # was still in the subject, and the text went there — then the verification
+                # could not find the body either, reported "did not land", and the agent
+                # retyped into the subject again. A field we have NAMED but cannot reach is
+                # a gap in our own knowledge; guessing with coordinates turns that into
+                # corrupted text in a field the human never sees us touch.
+                return ActionResult(
+                    success=False,
+                    reason=(
+                        f"could not reach the {field} field — nothing was typed. "
+                        "Re-observe and try the field from the element list."
+                    ),
+                    error_code="FIELD_UNREACHABLE",
+                )
+        elif action.point is not None:
             x, y = action.point
             await self._page.mouse.click(x, y)
-
-        recipient_field = _is_recipient_arg(action)
 
         if len(text) > TYPE_KEYSTROKE_LIMIT:
             # One CDP round trip instead of three per character. `Input.insertText` is a
@@ -426,8 +726,70 @@ class PlaywrightEmailSurface:
             # Enter also accepts the highlighted suggestion, which is what a human does.
             await self._page.keyboard.press("Enter")
 
+        # Did it land where it was aimed?
+        #
+        # The failure this catches is silent by nature: text goes into the wrong field, the
+        # action reports success, and the agent proceeds on a false belief — which is how
+        # "Good Evening" ended up in the body while the subject stayed empty, and why the
+        # next six turns made no sense. Checking costs one DOM read and converts an
+        # invisible corruption into a typed failure the agent can actually respond to.
+        #
+        # Only for the fields whose state is knowable; a click into arbitrary page content
+        # has no postcondition to check.
+        if field and text:
+            landed = await self._field_has_content(field)
+            # `None` means unfindable, not empty — see `_field_has_content`. Only a
+            # confident False is a failure; anything else lets the write stand.
+            if landed is False:
+                return ActionResult(
+                    success=False,
+                    reason=(
+                        f"the text did not land in the {field} field — it is still empty. "
+                        "Re-observe: the compose window may have moved."
+                    ),
+                    error_code="TYPE_DID_NOT_LAND",
+                )
+
         # NEVER log `text` — a recipient resolved from a token is raw PII by this point.
         return ActionResult(success=True, reason=f"typed {len(text)} characters")
+
+    async def _field_has_content(self, field: str) -> bool | None:
+        """Whether a compose field now holds anything. `None` when it cannot be read.
+
+        **Checks EVERY match, not the first**, and that is the whole correctness of it. The
+        write and the check resolve the selector differently: `page.focus()` takes the first
+        ACTIONABLE match — the field you can actually see — while `eval_on_selector` takes
+        the first match in DOM order, visible or not. Gmail keeps hidden legacy inputs
+        beside its live fields, so the text went into the visible combobox and this read an
+        empty hidden input, then failed an action that had just succeeded.
+
+        Any match holding text means the field is written; that mirrors `filledWithin` in
+        the extractor, which decides FILLED the same way.
+
+        `None`, not `False`, when nothing can be read: an unreadable field is not an empty
+        one, and reporting a good write as a failure sends the agent retyping over text that
+        is already correct — the exact duplication this file works to prevent.
+        """
+        seen = False
+        for selector in _FIELD_SELECTORS[field]:
+            try:
+                matches = await self._page.eval_on_selector_all(
+                    selector,
+                    "els => els.map(el => "
+                    "((el.value !== undefined ? el.value : el.innerText) || '').trim())",
+                )
+            except Exception:
+                continue
+            if not matches:
+                continue
+            seen = True
+            if any(matches):
+                return True
+        # Nothing matched ANY selector: the field is not "empty", it is unfindable, and the
+        # difference matters. Returning False here reported a write as failed whenever the
+        # selectors did not know this Gmail's markup — so the agent retyped, and the text it
+        # had already put somewhere was appended a second time. "Not found" is unknown.
+        return False if seen else None
 
     async def _insert_text(self, text: str) -> None:
         """Bulk-insert into the focused element, falling back to keystrokes.
@@ -442,6 +804,262 @@ class PlaywrightEmailSurface:
         except Exception as exc:
             logger.info("insertText unavailable (%s); falling back to keystrokes", exc)
             await self._page.keyboard.type(text, delay=4)
+
+    async def _do_send(self, action: ResolvedAction) -> ActionResult:
+        """Send the open compose window. Only ever reached AFTER the approval gate.
+
+        **This handler did not exist**, and its absence is why no `Send` had ever worked:
+        `_perform` looks for `_do_<verb>`, found nothing, and returned `VERB_NOT_BOUND` —
+        "Send has no handler" — at the exact moment a human had just approved sending. The
+        agent's only way through was to fall back to clicking the Send button, which the
+        worker prompt actively discourages. So the recommended path was the broken one.
+
+        Ctrl+Enter first, the button second. The shortcut is Gmail's own and needs no
+        element to be found, which makes it immune to the reflow that moves buttons around
+        mid-turn; the button click is the fallback for a Gmail where the shortcut is off.
+        """
+        # The dialog closing is how Gmail says "sent". Captured first so the check after is
+        # a comparison rather than a guess.
+        await self._page.keyboard.press("Control+Enter")
+        if await self._compose_closed():
+            return ActionResult(
+                success=True, reason="sent", undo={"kind": "send", "reversible": False}
+            )
+
+        # The shortcut can be disabled in Gmail settings. Fall back to the button.
+        for selector in (
+            'div[role="button"][data-tooltip^="Send"]',
+            'div[role="button"][aria-label^="Send"]',
+            '[data-tooltip^="Send"]',
+        ):
+            try:
+                await self._page.click(selector, timeout=1500)
+            except Exception:
+                continue
+            if await self._compose_closed():
+                return ActionResult(
+                    success=True, reason="sent", undo={"kind": "send", "reversible": False}
+                )
+
+        # Never report a send that cannot be confirmed. A false success here is the worst
+        # outcome available: the agent believes the mail has gone, completes the run, and
+        # the draft is still sitting open — or it tries again and sends twice.
+        return ActionResult(
+            success=False,
+            reason="the compose window is still open — the message does not appear to have sent",
+            error_code="SEND_NOT_CONFIRMED",
+        )
+
+    async def _compose_closed(self) -> bool:
+        """Did the compose dialog go away? Gmail's own signal that the mail left."""
+        try:
+            await self._page.wait_for_selector(
+                '[role="dialog"] [name="subjectbox"], [role="dialog"] [g_editable="true"]',
+                state="detached",
+                timeout=5000,
+            )
+            return True
+        except Exception:
+            return False
+
+    async def _row_action(
+        self,
+        action: ResolvedAction,
+        *,
+        tooltips: tuple[str, ...],
+        did: str,
+    ) -> ActionResult:
+        """Hover a mail row, then click one of its action buttons.
+
+        The shared body of Archive, MarkRead and DeleteForever — all the same interaction,
+        differing only in which button. Written once because three copies of a hover-then-
+        find-the-button dance would drift, and the one that drifted would act on the wrong
+        row silently.
+
+        **Deliberately not keyboard shortcuts.** `e` archives and `#` deletes in Gmail, and
+        both would be shorter than this — but shortcuts are OFF by default and the failure
+        when they are off is silent: the keystroke goes nowhere, the page does not change,
+        and the agent burns its budget re-pressing a key that will never work.
+        """
+        if action.point is None:
+            return ActionResult(
+                success=False,
+                reason=f"{action.verb} needs the [N] of a mail row",
+                error_code="STALE_INDEX",
+            )
+
+        x, y = action.point
+        # The toolbar only exists while hovering, so this move is the action, not politeness.
+        await self._page.mouse.move(x, y)
+
+        try:
+            spot = await self._page.evaluate(
+                _ROW_ACTION_JS, {"y": y, "tooltips": list(tooltips), "band": ROW_BAND_PX}
+            )
+        except Exception as exc:  # page closed or navigating
+            return ActionResult(success=False, reason=f"{action.verb} failed: {exc}")
+
+        if spot is None:
+            # Say which button was looked for. "Archive failed" sends the agent guessing;
+            # naming the control lets it try the row's own menu instead.
+            wanted = " or ".join(repr(t) for t in tooltips)
+            return ActionResult(
+                success=False,
+                reason=(
+                    f"no {wanted} control appeared for that row — it may not be available "
+                    "in this view. Open the thread and act from inside it."
+                ),
+                error_code="ROW_ACTION_UNAVAILABLE",
+            )
+
+        await self._page.mouse.click(spot["x"], spot["y"])
+        index = action.call.args.get("index")
+        return ActionResult(
+            success=True,
+            reason=f"{did} [{index}]",
+            undo={"kind": action.verb.lower(), "index": index},
+        )
+
+    async def _do_archive(self, action: ResolvedAction) -> ActionResult:
+        """Archive one thread. Reversible — it stays searchable in All Mail."""
+        return await self._row_action(
+            action, tooltips=("Archive",), did="archived"
+        )
+
+    async def _do_markread(self, action: ResolvedAction) -> ActionResult:
+        return await self._row_action(
+            action, tooltips=("Mark as read",), did="marked read"
+        )
+
+    async def _do_deleteforever(self, action: ResolvedAction) -> ActionResult:
+        """Permanently delete. Gated, and matched narrowly on purpose.
+
+        **Only "Delete forever" counts.** Gmail's ordinary "Delete" moves a thread to Trash,
+        which is reversible and available on every row; "Delete forever" exists only inside
+        Trash and Spam. Accepting the former would report a permanent deletion that had not
+        happened — and this verb is gated precisely because the human is approving something
+        that cannot be undone. Better to refuse than to overstate what was done.
+        """
+        return await self._row_action(
+            action, tooltips=("Delete forever",), did="permanently deleted"
+        )
+
+    async def _do_label(self, action: ResolvedAction) -> ActionResult:
+        """Apply a label. Opens Gmail's label menu, then picks the entry if it is there.
+
+        Two steps, and the second is allowed to fail into the loop rather than be forced.
+        The menu's contents are a mailbox's own labels — unknowable from here — so if the
+        named one is not found, the menu is left OPEN and the agent is told to choose from
+        the list. The next observation contains those entries, which is exactly the
+        observe-then-act cycle this loop is built around.
+        """
+        opened = await self._row_action(
+            action, tooltips=("Labels", "Label as", "Move to"), did="opened the label menu"
+        )
+        if not opened.success:
+            return opened
+
+        wanted = str(action.call.args.get("label") or "").strip()
+        if not wanted:
+            return ActionResult(
+                success=True,
+                reason="the label menu is open — pick a label from the list",
+            )
+        return await self._pick_menu_entry(wanted, did=f"labelled {wanted!r}")
+
+    async def _do_snooze(self, action: ResolvedAction) -> ActionResult:
+        """Snooze a thread. Same shape as Label: open the menu, then pick if we can."""
+        opened = await self._row_action(action, tooltips=("Snooze",), did="opened snooze")
+        if not opened.success:
+            return opened
+
+        wanted = str(action.call.args.get("until") or "").strip()
+        if not wanted:
+            return ActionResult(
+                success=True,
+                reason="the snooze menu is open — pick a time from the list",
+            )
+        return await self._pick_menu_entry(wanted, did=f"snoozed until {wanted!r}")
+
+    async def _pick_menu_entry(self, wanted: str, *, did: str) -> ActionResult:
+        """Click a menu entry by its visible text, or leave the menu open and say so.
+
+        Matching is case-insensitive and substring-based because a human writes "tomorrow"
+        where Gmail writes "Tomorrow morning, 8:00 AM". A miss is NOT a failure: the menu is
+        on screen, so the next observation lists every entry and the agent can click one by
+        index. Forcing an exact match would turn a solvable turn into a dead end.
+        """
+        try:
+            entry = self._page.get_by_role("menuitem", name=wanted, exact=False).first
+            await entry.click(timeout=2000)
+        except Exception:
+            return ActionResult(
+                success=True,
+                reason=(
+                    f"the menu is open but nothing matched {wanted!r} — choose the closest "
+                    "entry from the list"
+                ),
+            )
+        return ActionResult(success=True, reason=did)
+
+    async def _do_openfolder(self, action: ResolvedAction) -> ActionResult:
+        """Go to a folder or label by NAME.
+
+        Two routes, and the order matters. **The sidebar link first**, because clicking what
+        a human would click works for a user's own labels as well as the built-in folders,
+        and needs no knowledge of how Gmail spells anything. **The allowlisted location
+        second**, for when the sidebar is collapsed or the label is hidden behind "More".
+
+        A name that matches neither is refused, and refused by NAME so the agent can try
+        another. It is never turned into a URL guess: the moment a folder name can become an
+        arbitrary address, an injected "check yourdomain.example/login" becomes navigable,
+        and that is the entire reason `Navigate` is bound to nobody.
+        """
+        wanted = str(action.call.args.get("folder") or "").strip()
+        if not wanted:
+            return ActionResult(
+                success=False,
+                reason="OpenFolder needs a folder name",
+                error_code="FOLDER_UNKNOWN",
+            )
+
+        if await self._click_sidebar(wanted):
+            await self._settle()
+            return ActionResult(success=True, reason=f"opened {wanted}")
+
+        destination = GMAIL_FOLDERS.get(wanted.lower())
+        if destination is not None:
+            # Same page, Gmail's own fragment — not a navigation to anywhere new.
+            await self._page.evaluate("hash => { location.hash = hash; }", destination)
+            await self._settle()
+            return ActionResult(success=True, reason=f"opened {wanted}")
+
+        known = ", ".join(sorted({v for v in GMAIL_FOLDERS}))
+        return ActionResult(
+            success=False,
+            reason=(
+                f"no folder or label called {wanted!r} is visible. Known folders: {known}. "
+                "For your own labels, click the name in the sidebar list."
+            ),
+            error_code="FOLDER_UNKNOWN",
+        )
+
+    async def _click_sidebar(self, wanted: str) -> bool:
+        """Click the sidebar entry whose name matches. False if there is no such entry.
+
+        Case-insensitive and exact-after-trim: "sent" must not match "Sent Items Archive" if
+        a user happens to have a label by that name. A near-miss here navigates somewhere
+        the human did not ask for, and the agent then reads the wrong mailbox with complete
+        confidence.
+        """
+        try:
+            found = await self._page.evaluate(_SIDEBAR_JS, wanted)
+        except Exception:
+            return False
+        if not found:
+            return False
+        await self._page.mouse.click(found["x"], found["y"])
+        return True
 
     async def _do_clear(self, action: ResolvedAction) -> ActionResult:
         if action.point is not None:
@@ -719,6 +1337,19 @@ async def _ensure_browser(
 
 
 #: Fields whose value is an ADDRESS and which need committing rather than merely filling.
+def new_recipients(text: str, present: set[str]) -> list[str]:
+    """The addresses in `text` that are not already in the field, in order.
+
+    Split out so the decision is testable without a browser: reading the live page needs
+    Chrome, but "which of these are new?" is arithmetic and deserves exhaustive cases.
+
+    Case-insensitive, because Gmail echoes an address back in whatever case it was typed
+    and a capital letter is not a different person.
+    """
+    wanted = [part.strip() for part in text.split(",") if part.strip()]
+    return [address for address in wanted if address.lower() not in present]
+
+
 RECIPIENT_ARGS = ("recipient", "cc", "bcc")
 
 

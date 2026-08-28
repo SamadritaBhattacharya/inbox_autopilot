@@ -40,6 +40,7 @@ REQUIRED_SLOTS: dict[Action, list[list[str]]] = {
     Action.SEARCH: [["query"]],
     Action.COUNT: [],
     Action.ANSWER: [["query"]],
+    Action.OPEN_FOLDER: [["folder"]],
     # ── mutating: the full bar ──
     Action.SEND_EMAIL: [["recipient_identity"], ["topic", "body_intent"]],
     Action.REPLY: [["thread_ref"], ["stance", "body_intent"]],
@@ -191,7 +192,32 @@ SLOT_PROMPTS: dict[str, str] = {
     "target_label": "which label to apply",
     "until": "when it should come back",
     "query": "what to search for",
+    "folder": "which folder or label to open",
     "action_clarification": "what you'd like me to do",
+}
+
+#: What each action IS, in words a person can say yes or no to.
+#:
+#: Used when every slot is filled and the only thing still in doubt is the classification.
+#: The old fallback there was "Could you confirm what you'd like me to do?" — which names
+#: nothing, so there is no answer that can resolve it. Asking about the ACTION gives the
+#: human something to confirm or correct, which is what turns a stuck turn into progress.
+ACTION_PROMPTS: dict[Action, str] = {
+    Action.SEND_EMAIL: "send an email",
+    Action.REPLY: "reply to a thread",
+    Action.FORWARD: "forward a thread",
+    Action.TRIAGE: "tidy up your inbox",
+    Action.ARCHIVE: "archive some mail",
+    Action.LABEL: "label some mail",
+    Action.SNOOZE: "snooze some mail",
+    Action.EXTRACT_EVENT: "pull a calendar event out of a thread",
+    Action.APPLY_RULES: "apply your standing rules",
+    Action.READ: "read some mail",
+    Action.SUMMARIZE: "summarize your mail",
+    Action.SEARCH: "search your mail",
+    Action.COUNT: "count some mail",
+    Action.ANSWER: "answer a question about your mail",
+    Action.OPEN_FOLDER: "open a folder",
 }
 
 #: Sensible defaults for read-only work, applied by the gate before it decides to ask.
@@ -242,11 +268,17 @@ def confidence(intent: TaskIntent) -> float:
     groups = REQUIRED_SLOTS.get(intent.action, [])
     if intent.action is Action.UNKNOWN:
         return 0.0
+
+    # A human who answered a question framed around this action has settled what the action
+    # IS. The classifier's own number is evidence; theirs is better evidence, and it must be
+    # able to override — otherwise no amount of answering can ever raise the score and the
+    # gate traps a fully-specified task. See `TaskIntent.action_confirmed`.
+    base = 1.0 if intent.action_confirmed else intent.action_confidence
     if not groups:
-        return intent.action_confidence
+        return base
 
     satisfied = len(groups) - len(missing_slots(intent))
-    return intent.action_confidence * (satisfied / len(groups))
+    return base * (satisfied / len(groups))
 
 
 #: Read-only work clears at a lower bar. The gate's caution should be proportional to what
@@ -294,7 +326,18 @@ def question_for(intent: TaskIntent) -> str:
     """
     missing = outstanding_slots(intent)
     if not missing:
-        return "Could you confirm what you'd like me to do?"
+        # Nothing is missing, so the only thing still in doubt is WHAT this is. Name it, so
+        # there is an answer that resolves the question — "yes" confirms the action and the
+        # gate clears on the next pass (see `TaskIntent.action_confirmed`).
+        #
+        # The old text here was "Could you confirm what you'd like me to do?", which names
+        # nothing and therefore cannot be resolved by any reply. Asked three times against a
+        # fully-specified task, it read as an agent that had stopped listening — and it had,
+        # in the sense that no answer could have changed the outcome.
+        what = ACTION_PROMPTS.get(intent.action)
+        if what:
+            return f"Just to check — you want me to {what}?"
+        return "Could you tell me what you'd like me to do?"
 
     conditions_by_slot = {c.slot: c for c in CONDITIONAL_SLOTS.get(intent.action, ())}
     phrases = [

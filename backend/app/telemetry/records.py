@@ -36,6 +36,11 @@ class ErrorCode(StrEnum):
     APPROVAL_REJECTED_NO_ALT = "APPROVAL_REJECTED_NO_ALT"
     CONTEXT_INCOMPLETE = "CONTEXT_INCOMPLETE"
 
+    #: A send was dispatched but could not be confirmed afterwards. Distinct from a send
+    #: that FAILED: nobody knows which happened, and "I could not tell" is the honest
+    #: report — the user then checks Sent rather than being told a lie in either direction.
+    SEND_UNVERIFIED = "SEND_UNVERIFIED"
+
     # ── infrastructure ──
     PROVIDER_EXHAUSTED = "PROVIDER_EXHAUSTED"
     SURFACE_UNAVAILABLE = "SURFACE_UNAVAILABLE"

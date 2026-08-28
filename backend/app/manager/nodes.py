@@ -18,7 +18,7 @@ import re
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
 from app.llm.base import LLMClient, Message
-from app.manager.intent import Action, Plan, Route, TaskIntent
+from app.manager.intent import Action, Plan, Route, TaskIntent, merge_intent
 from app.manager.slots import (
     apply_defaults,
     confidence,
@@ -30,7 +30,7 @@ from app.manager.slots import (
 from app.prompts import load_prompt
 from app.rules.store import RulesStore
 from app.security.patterns import find_emails
-from app.security.vault import SessionPiiVault
+from app.security.vault import SessionPiiVault, trust_addresses
 from app.telemetry.records import ErrorCode, StepRecord
 from app.workers.registry import topology_for, worker_for
 
@@ -220,7 +220,105 @@ def _trust_user_addresses(intent: TaskIntent, vault: SessionPiiVault) -> TaskInt
     return intent.with_slots(**updated) if updated else intent
 
 
-def build_context_gate_node(*, threshold: float = 0.85, max_asks: int = MAX_ASKS):
+def build_reclassifier(llm: LLMClient, emitter: EventEmitter | None = None):
+    """Re-read the WHOLE conversation and re-derive the intent.
+
+    One classifier call, on the ask path only, and it buys the thing a raw answer cannot:
+    a compound reply lands in the right slots. Told "to Biyash about the demo" with both
+    the recipient and the topic missing, the gate used to put that entire sentence into
+    BOTH — it had no way to split it. A classifier reading task-plus-answers does.
+
+    **The answers arriving here are already tokenized.** They are raw human text holding
+    real addresses, and this is a model call: leaving them in the clear would put PII in
+    front of the LLM, which is the one thing the vault exists to prevent. The gate mints
+    them before calling.
+
+    Returns `None` on any failure. A provider outage must degrade to the old behaviour —
+    fill the missing slots with the answer — rather than take down a gate the human is
+    actively talking to.
+    """
+
+    async def reclassify(task: str, answers: list[str]) -> TaskIntent | None:
+        if not answers:
+            return None
+
+        clarifications = "\n".join(f"- {a}" for a in answers if a.strip())
+        conversation = (
+            f"Original request: {task}\n\n"
+            f"The user then clarified:\n{clarifications}\n\n"
+            "Re-read all of it together and return the intent it describes."
+        )
+
+        try:
+            result = await llm.complete(
+                role="classifier",
+                messages=[
+                    Message(role="system", content=_INTAKE_SYSTEM, cacheable=True),
+                    Message(role="user", content=conversation),
+                ],
+            )
+        except Exception:
+            logger.warning("re-classification failed; keeping the raw answer", exc_info=True)
+            return None
+
+        fresh = _parse_intent(result.text or result.reasoning)
+        logger.info(
+            "re-classified: %s (confidence %.2f) from %d clarification(s)",
+            fresh.action,
+            fresh.action_confidence,
+            len(answers),
+        )
+        if emitter is not None:
+            await emitter.intent(fresh.action.value, fresh.slots, fresh.action_confidence)
+        return fresh
+
+    return reclassify
+
+
+#: A "no" to a confirmation question. Kept narrow: these are answers to "you want me to
+#: send an email?", so a leading refusal is the whole signal — anything longer is the human
+#: explaining what they DID want, which is new information rather than a plain rejection.
+_NEGATIVE = re.compile(
+    r"^\s*(no|nope|nah|not|don\'?t|stop|wrong|incorrect)\b",
+    re.IGNORECASE,
+)
+
+
+_BARE_ACK = re.compile(
+    r"^\s*(yes|yeah|yep|yup|ok|okay|sure|correct|right|confirm|confirmed|go ahead|do it|please do"
+    r"|no|nope|nah|cancel|stop)[\s.!,]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_bare_acknowledgement(answer: str) -> bool:
+    """Is this answer purely a yes or a no, with no content to place?
+
+    The cost gate on re-classification. A bare "yes" cannot move a single slot, so
+    re-reading the conversation to discover that costs a classifier call and one round of
+    latency per confirmation for a result known in advance. "no, send it to Biyash
+    instead" is NOT bare and must still be re-read — the trailing content is exactly the
+    correction the re-read exists to catch.
+    """
+    return bool(_BARE_ACK.match(answer or ""))
+
+
+def _is_negative(answer: str) -> bool:
+    """Did the human decline the action we proposed?
+
+    A "no" must never be read as confirmation. Getting this backwards would take a human
+    saying "no, not an email" and start composing one.
+    """
+    return bool(_NEGATIVE.match(answer or ""))
+
+
+def build_context_gate_node(
+    *,
+    threshold: float = 0.85,
+    max_asks: int = MAX_ASKS,
+    vault: SessionPiiVault | None = None,
+    reclassify=None,
+):
     """The 100%-context rule (R3).
 
     Emits a question and pauses when anything required is missing. **Nothing downstream can
@@ -240,8 +338,69 @@ def build_context_gate_node(*, threshold: float = 0.85, max_asks: int = MAX_ASKS
         # next intake pass will refine it, and a slot filled with the wrong thing is caught
         # here rather than acted on.
         if state.answers and state.pending_question:
-            latest = state.answers[-1]
-            intent = intent.with_slots(**{name: latest for name in outstanding_slots(intent)})
+            # Tokenize the answer, exactly as intake tokenizes the task.
+            #
+            # **This is the whole 100%-context rule working and then throwing the answer
+            # away.** The gate correctly refused to start without a recipient and asked for
+            # one. The human typed an address. It went into the slot RAW — and a raw address
+            # is not a recipient this system can use: the dispatcher only ever accepts vault
+            # tokens, so the worker was handed something it could not send to, typed it as
+            # literal text into the To box, and produced loose text with no chip.
+            #
+            # An address in an ANSWER is trusted input for exactly the same reason one in
+            # the task is: the operator typed it, in response to being asked. Minting it
+            # addressable here is what makes answering the question actually work.
+            # Tokenize EVERY answer, not just the newest: the whole conversation is about
+            # to be re-read by a model, and an address left in the clear anywhere in it is
+            # PII in front of the LLM.
+            history = [trust_addresses(a, vault) for a in state.answers]
+            latest = history[-1]
+            asked_for = outstanding_slots(intent)
+            declined = _is_negative(latest)
+
+            # Spend a classifier call only when the answer is genuinely ambiguous —
+            # otherwise the re-read costs a round trip to learn what we already know.
+            #
+            #   * two or more slots outstanding: the answer may cover several of them
+            #     ("to Biyash about the demo"), and splitting it is the whole point.
+            #   * nothing outstanding and not a bare yes/no: the human is correcting us
+            #     ("no, send it to Biyash instead") and the correction must be read.
+            #   * exactly one slot outstanding: the answer IS that value. Nothing to split.
+            ambiguous = len(asked_for) > 1 or (
+                not asked_for and not _is_bare_acknowledgement(latest)
+            )
+            needs_reread = reclassify is not None and ambiguous
+            fresh = await reclassify(state.task, history) if needs_reread else None
+            if fresh is not None:
+                # A second reading of everything said so far. `merge_intent` decides what it
+                # is allowed to change — never a slot the human gave, and never the action
+                # unless they rejected it.
+                intent = merge_intent(intent, fresh, declined=declined)
+
+            if asked_for and outstanding_slots(intent):
+                # Still missing after the re-read, so the answer IS the missing value and
+                # the classifier simply could not place it. Falling back to the old
+                # behaviour beats leaving a slot empty the human has already filled aloud.
+                intent = intent.with_slots(
+                    **{name: latest for name in outstanding_slots(intent)}
+                )
+            elif not asked_for and not declined:
+                # Nothing was missing — the question was "you want me to send an email?",
+                # and this is the human saying yes. That answer GROUNDS the action.
+                #
+                # **The livelock this prevents.** `confidence` is capped by the classifier's
+                # own number, so a 0.80 reading against a 0.85 bar could never be raised by
+                # anything the human typed. A fully-specified task was refused three times
+                # and died reporting `missing: .` — with nothing missing. Evidence from a
+                # human has to be able to move the belief, or the gate is not tracking
+                # anything, it is just waiting for a number that will never change.
+                #
+                # Scoped to exactly that case on purpose. When slots ARE missing, a vague
+                # answer fills them with vague values and must NOT also vouch for the
+                # action — otherwise "still vague" clears a gate whose whole job is to
+                # refuse exactly that.
+                logger.info("the human confirmed the action")
+                intent = intent.confirmed()
 
         outstanding = outstanding_slots(intent)
         score = confidence(intent)
@@ -274,9 +433,21 @@ def build_context_gate_node(*, threshold: float = 0.85, max_asks: int = MAX_ASKS
                 "error_code": ErrorCode.CONTEXT_INCOMPLETE,
                 "finished": True,
                 "success": False,
+                # Say the REAL reason. "missing: ." — an empty list — was what the human
+                # saw when the blocker was confidence rather than information, and it told
+                # them nothing they could act on.
                 "reason": (
-                    "I still don't have enough to start safely after "
-                    f"{max_asks} attempts — missing: {', '.join(outstanding)}."
+                    (
+                        "I still don't have enough to start safely after "
+                        f"{max_asks} attempts — missing: {', '.join(outstanding)}."
+                    )
+                    if outstanding
+                    else (
+                        f"I could not confirm what you wanted after {max_asks} attempts. "
+                        "Everything I needed was there, but I was not confident enough "
+                        "about the task itself to start. Try phrasing it as a direct "
+                        "instruction."
+                    )
                 ),
             }
 

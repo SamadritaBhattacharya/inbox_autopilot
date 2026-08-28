@@ -49,6 +49,18 @@
           "title": "Bodyfilled",
           "type": "boolean"
         },
+        "bodyIndex": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bodyindex"
+        },
         "composeOpen": {
           "default": false,
           "title": "Composeopen",
@@ -58,6 +70,18 @@
           "default": false,
           "title": "Subjectfilled",
           "type": "boolean"
+        },
+        "subjectIndex": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subjectindex"
         },
         "threadToken": {
           "anyOf": [
@@ -75,6 +99,18 @@
           "default": false,
           "title": "Tofilled",
           "type": "boolean"
+        },
+        "toIndex": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Toindex"
         },
         "unreadCount": {
           "anyOf": [

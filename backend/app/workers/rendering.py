@@ -95,6 +95,23 @@ def task_block(state: AgentState) -> str:
     return "\n".join(lines)
 
 
+def _field_state(label: str, filled: bool, index: int | None) -> str:
+    """One compose field as `Subject: empty [61]`.
+
+    The index is omitted rather than faked when the field did not survive the funnel —
+    an index the model was never shown is refused at dispatch, so inventing one would send
+    it at a number that cannot work and teach it the numbers are unreliable.
+    """
+    state = "FILLED" if filled else "empty"
+    # "(not on screen)" was actively harmful: it told the agent to scroll for a field that
+    # was on screen the whole time, just unmatched by our selector. It scrolled six times,
+    # the page never changed, and the stuck guard killed the run. An unknown location is a
+    # gap in OUR knowledge, not a fact about the page — so say that, and point at the one
+    # place the answer definitely is.
+    where = f" [{index}]" if index is not None else " (find it in the list below)"
+    return f"{label}: {state}{where}"
+
+
 def observation_block(state: AgentState) -> str:
     """Render the observation as the model sees it."""
     observation = state.observation
@@ -117,15 +134,22 @@ def observation_block(state: AgentState) -> str:
             # What is already done, so it stops guessing. A committed recipient becomes a
             # chip and the input reads empty, so the agent typed the address a second time
             # on top of the first — visible in the compose window as a chip AND loose text.
+            # State AND location, together. Reporting only the state left the agent to
+            # re-find each field by name every turn, against a list that renumbers every
+            # turn — an open autocomplete dropdown alone shifts every index. Observed live:
+            # it read "Subject at [60]", acted, saw [60] had become something else,
+            # concluded its own action had failed, and spent four turns hunting. The number
+            # comes from this same observation, so it cannot be stale.
+            mail = observation.mail
             done = [
-                f"To: {'FILLED' if observation.mail.to_filled else 'empty'}",
-                f"Subject: {'FILLED' if observation.mail.subject_filled else 'empty'}",
-                f"Body: {'FILLED' if observation.mail.body_filled else 'empty'}",
+                _field_state("To", mail.to_filled, mail.to_index),
+                _field_state("Subject", mail.subject_filled, mail.subject_index),
+                _field_state("Body", mail.body_filled, mail.body_index),
             ]
             lines.append("  " + " · ".join(done))
             lines.append(
-                "  Fill only the empty ones. A FILLED field is done — typing into it again "
-                "adds a SECOND copy."
+                "  Type into the [N] given here — do not search the list for these fields. "
+                "Fill only the empty ones; a FILLED field is done."
             )
     if observation.changed:
         lines.append(f"changed: {observation.changed}")

@@ -93,6 +93,25 @@ class MailContext(BaseModel):
     subject_filled: bool = Field(default=False, alias="subjectFilled")
     body_filled: bool = Field(default=False, alias="bodyFilled")
 
+    #: WHERE each compose field is, this turn. `None` when it is not on screen.
+    #:
+    #: Indices are rebuilt every observation by design — the same field legitimately gets a
+    #: different number whenever the page changes, and an open autocomplete dropdown changes
+    #: it constantly. Telling the agent a field is `empty` without telling it *where* leaves
+    #: it re-finding that field by name every turn against a list that renumbered under it.
+    #:
+    #: Observed live, and it cost most of a run: the agent read "Subject at [60]", acted,
+    #: saw [60] had become something else, concluded its own action had failed, spent four
+    #: turns on Extract and Scroll hunting for the field, then typed into an index carried
+    #: over from an earlier turn. Carrying the number alongside the state removes the search
+    #: entirely — and because it comes from the same observation, it cannot be stale.
+    #:
+    #: An index is not PII: it is a per-turn integer with no meaning outside this
+    #: observation, which is the entire point of the Set-of-Marks scheme.
+    to_index: int | None = Field(default=None, alias="toIndex")
+    subject_index: int | None = Field(default=None, alias="subjectIndex")
+    body_index: int | None = Field(default=None, alias="bodyIndex")
+
 
 class Observation(BaseModel):
     """What the model is allowed to see: a short, numbered, tokenized element list.

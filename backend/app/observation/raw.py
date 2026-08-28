@@ -102,6 +102,12 @@ class PageMeta:
     to_filled: bool = False
     subject_filled: bool = False
     body_filled: bool = False
+    #: The `node_id` of each compose field, from the extractor. The funnel resolves these to
+    #: the `[N]` the model sees — a node id is stable within one extraction, an index is not
+    #: stable across turns, and only the executor can bridge the two.
+    to_node: int | None = None
+    subject_node: int | None = None
+    body_node: int | None = None
     #: The open dialog's box, when there is one: `(x, y, width, height)`, viewport-relative.
     #:
     #: Not for clicking — for PRIORITY. When a compose window is open, its fields are the

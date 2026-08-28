@@ -9,6 +9,8 @@ READ-ONLY actions (they only look; they never change the mailbox):
   search     find mail matching criteria          slots: query
   count      how many of something                slots: scope, query
   answer     ANY other question about the mailbox slots: query
+  open_folder go to a folder or label              slots: folder
+             (inbox, sent, drafts, spam, trash, starred, all mail, or a label name)
 
 MUTATING actions:
   send_email  slots: recipient_identity, topic, body_intent, tone, cc, subject

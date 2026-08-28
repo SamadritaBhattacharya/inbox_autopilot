@@ -156,6 +156,18 @@ export class ObservationFunnel {
     const trimmed = new Map<number, Point>();
     for (const [index, point] of geometry) if (shown.has(index)) trimmed.set(index, point);
 
+    // Resolve each compose field's node id to the index the model will actually see. Only
+    // for fields that SURVIVED: an index the agent was never shown is refused at dispatch,
+    // so reporting one would aim it at a number that cannot work.
+    const shownNodes = new Map<number, number>();
+    for (const element of indexed) {
+      if (element.index !== null && shown.has(element.index)) {
+        shownNodes.set(element.nodeId, element.index);
+      }
+    }
+    const fieldIndex = (nodeId: number | null | undefined): number | null =>
+      nodeId === null || nodeId === undefined ? null : shownNodes.get(nodeId) ?? null;
+
     // Mint the identifier tokens in a FIXED order, before the literal that uses them.
     //
     // The order is observable: the vault numbers tokens sequentially, so minting the thread
@@ -190,6 +202,9 @@ export class ObservationFunnel {
         toFilled: Boolean(meta.toFilled),
         subjectFilled: Boolean(meta.subjectFilled),
         bodyFilled: Boolean(meta.bodyFilled),
+        toIndex: fieldIndex(meta.toNode),
+        subjectIndex: fieldIndex(meta.subjectNode),
+        bodyIndex: fieldIndex(meta.bodyNode),
       },
       screenshotRef: options.screenshotRef ?? null,
       changed: options.changed ?? null,

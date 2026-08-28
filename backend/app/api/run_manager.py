@@ -20,6 +20,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.events.emitter import EventEmitter
 from app.events.protocol import AgentEvent
@@ -53,6 +54,11 @@ class Run:
     fanout: FanoutSink = field(default_factory=FanoutSink)
     task: asyncio.Task | None = None
     cleanup: Callable[[], Awaitable[None]] | None = None
+    #: This run's PII vault, borrowed from the surface. Held so that human text arriving
+    #: OUT OF BAND — a mid-run correction typed into the cockpit — can be tokenized against
+    #: the same session as everything else. Without it, "also add alex@corp.com" reaches the
+    #: model in the clear and carries no token the dispatcher would accept.
+    vault: Any | None = None
     #: Resolved when a human answers a question or decides an approval.
     _answer: asyncio.Future | None = None
     finished_at: float | None = None

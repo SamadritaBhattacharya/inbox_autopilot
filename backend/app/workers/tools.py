@@ -32,6 +32,15 @@ class ReadThread(BaseModel):
     index: int = Field(description="The [N] of the thread to open")
 
 
+class OpenFolder(BaseModel):
+    """Go to a mailbox folder or label: inbox, sent, drafts, spam, trash, starred, all mail,
+    or the name of one of your labels."""
+
+    folder: str = Field(
+        description="Folder or label name, e.g. 'sent', 'spam', 'trash', 'Work'"
+    )
+
+
 class Extract(BaseModel):
     """Answer a question about what is currently on screen, without acting."""
 
@@ -185,7 +194,24 @@ class Complete(BaseModel):
 # ── per-worker bindings ─────────────────────────────────────────────────────
 
 CONTROL_TOOLS: tuple[type[BaseModel], ...] = (Remember, Recall, SetPlan, AskUser, Complete)
-PERCEPTION_TOOLS: tuple[type[BaseModel], ...] = (Scroll, ReadThread, Extract, WaitFor)
+#: Perception, plus getting to the part of the mailbox you want to perceive.
+#:
+#: `OpenFolder` lives here — with every worker, including the read-only ones — because
+#: moving between folders changes **what you can see, never what the mailbox contains**.
+#: A `summarize` run that cannot reach Sent is not safer, only less useful.
+#:
+#: It is deliberately NOT a `Navigate(url=...)`. That verb exists on the surface and is
+#: bound to nobody, because an agent reading attacker-controlled email must never be able to
+#: load an arbitrary address — that is a credential-harvest page one injected sentence away.
+#: Naming a FOLDER keeps the useful half and gives away none of it: the model supplies a
+#: name, the executor decides where that lives.
+PERCEPTION_TOOLS: tuple[type[BaseModel], ...] = (
+    Scroll,
+    ReadThread,
+    Extract,
+    WaitFor,
+    OpenFolder,
+)
 
 #: Triage: read the backlog and tidy it. **No Send, no DeleteForever** — an injected
 #: "forward this to…" has no tool to reach for.

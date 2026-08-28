@@ -155,6 +155,21 @@ class ObservationFunnel:
         shown = {element.index for element in listed}
         geometry = {i: point for i, point in geometry.items() if i in shown}
 
+        # Resolve each compose field's node id to the index the model will actually see.
+        #
+        # Only for fields that SURVIVED to the listed set: an index the agent was never
+        # shown is not dispatchable (above), so reporting one would send it at a number the
+        # dispatcher then refuses. A field that was pruned reports `None`, which renders as
+        # "not on screen" — true, and something the agent can act on by scrolling.
+        by_node = {
+            element.node_id: element.index for element in indexed if element.index in shown
+        }
+        field_index = {
+            "to": by_node.get(meta.to_node) if meta.to_node is not None else None,
+            "subject": by_node.get(meta.subject_node) if meta.subject_node is not None else None,
+            "body": by_node.get(meta.body_node) if meta.body_node is not None else None,
+        }
+
         # Thread token FIRST, then the context id. The order is observable — the vault
         # numbers tokens sequentially — and the TypeScript funnel in `bridge-extension/`
         # must mint them the same way or the two surfaces describe the same page
@@ -180,6 +195,9 @@ class ObservationFunnel:
                 toFilled=meta.to_filled,
                 subjectFilled=meta.subject_filled,
                 bodyFilled=meta.body_filled,
+                toIndex=field_index["to"],
+                subjectIndex=field_index["subject"],
+                bodyIndex=field_index["body"],
             ),
             screenshotRef=screenshot_ref,
             changed=changed,

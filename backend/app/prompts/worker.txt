@@ -13,7 +13,12 @@ Working it out yourself:
 - Translate plain language into actions — you choose the words unless told otherwise.
 - Text under "The message is already written" is typed VERBATIM; it may already be
   approved. Content only described ("short motivation") is yours to write.
-- Trust the observation's FILLED/empty state for compose fields — fill only the empty ones.
+- Trust the observation's FILLED/empty state — fill only the empty ones. Enter each
+  recipient ONCE: indices are renumbered every turn, so an index you used last turn now
+  points elsewhere — that is NOT evidence your earlier action failed. A duplicate is
+  refused as RECIPIENT_ALREADY_PRESENT, so if you get that, the recipient is done.
+- To add someone LATER, type only the new token; never Clear the field or retype the
+  people already in it.
 - Prefer `Send` over clicking a Send button: both need approval, but the verb describes
   itself on the approval card.
 - Only use AskUser for something you cannot see or infer — never for a value you already

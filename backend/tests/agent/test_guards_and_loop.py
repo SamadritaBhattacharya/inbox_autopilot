@@ -66,9 +66,16 @@ def test_argument_order_does_not_change_the_signature():
     assert action_signature(a) == action_signature(b)
 
 
-@pytest.mark.parametrize("verb", ["Scroll", "WaitFor", "ReadThread", "Extract"])
+@pytest.mark.parametrize("verb", ["Scroll", "WaitFor", "ReadThread"])
 def test_verbs_meant_to_repeat_are_excluded(verb):
-    """Scrolling five times is reading, not looping."""
+    """Scrolling five times is reading, not looping.
+
+    `Extract` was on this list and has been removed deliberately — see
+    `test_an_identical_extract_counts_toward_repetition` below. The rule this list encodes
+    is "repeating it still makes progress", not "it has no side effects": scrolling down
+    twice moves twice, but asking the identical question twice returns the identical answer
+    and costs another LLM call for nothing.
+    """
     assert is_repetition_candidate(call(verb)) is False
 
 
@@ -383,3 +390,48 @@ def test_fake_surface_records_what_was_attempted_not_what_happened():
 def test_json_module_is_used_for_stable_signatures():
     """Guard against a refactor to repr(), which is dict-order dependent."""
     assert json.dumps({"b": 1, "a": 2}, sort_keys=True) == '{"a": 2, "b": 1}'
+
+
+# ── a read-only verb repeated identically is still a wasted turn ─────────────
+
+
+def test_an_identical_extract_counts_toward_repetition():
+    """Observed live: four identical `Extract("what is in the To field?")` calls in a row.
+
+    `Extract` was exempt from the repetition guard because it is a pure read with no side
+    effects — which made it look harmless. It is not: an identical read returns an
+    identical answer, so it cannot advance the run, and each one is a full LLM call. On a
+    free tier the binding constraint is requests, not consequences.
+    """
+    from inbox_contracts import ActionCall
+
+    from app.agent.guards import action_signature, is_repetition_candidate, repetition_count
+
+    call = ActionCall(name="Extract", args={"query": "what is in the To field?"})
+    assert is_repetition_candidate(call), "an identical re-read must be countable"
+
+    signature = action_signature(call)
+    assert repetition_count([signature] * 3, signature) == 3
+
+
+def test_two_different_extract_questions_are_not_repetition():
+    """The counterfactual. Genuine exploration must stay free — the signature hashes the
+    arguments, so different questions never count against each other."""
+    from inbox_contracts import ActionCall
+
+    from app.agent.guards import action_signature
+
+    first = action_signature(ActionCall(name="Extract", args={"query": "who sent this?"}))
+    second = action_signature(ActionCall(name="Extract", args={"query": "what is the date?"}))
+
+    assert first != second
+
+
+def test_scrolling_the_same_way_twice_is_still_progress():
+    """`Scroll` stays exempt: repeating it moves further down the page, which is exactly
+    what it is for. The exemption list is about progress, not about side effects."""
+    from inbox_contracts import ActionCall
+
+    from app.agent.guards import is_repetition_candidate
+
+    assert not is_repetition_candidate(ActionCall(name="Scroll", args={"direction": "down"}))

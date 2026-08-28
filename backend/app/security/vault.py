@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.security.patterns import TOKEN_PREFIX, PiiKind
+from app.security.patterns import TOKEN_PREFIX, PiiKind, find_emails
 
 
 class UnknownToken(KeyError):
@@ -156,3 +156,27 @@ class SessionPiiVault:
         return f"<SessionPiiVault {self.size} tokens>"
 
     __str__ = __repr__
+
+
+def trust_addresses(text: str, vault: PiiVault | None) -> str:
+    """Replace every operator-supplied address in `text` with an ADDRESSABLE token.
+
+    Shared by the two places raw human text enters the system: the task at intake, and a
+    mid-run correction. Both are the operator's own words, so an address in either is
+    trusted input — they typed it, so it is somewhere they meant to write.
+
+    Corrections went untokenized for a long time and it cost two things at once. The
+    obvious one: a real address reached the model in the clear, straight past the vault
+    that exists to stop exactly that, and was persisted in the feedback store on its way.
+    The subtler one: "also add alex@corp.com" gave the model an address with no token
+    behind it, so the dispatcher — which only ever accepts minted tokens — refused it. The
+    user's correction could not be carried out no matter how well the model understood it.
+
+    A `None` vault returns the text unchanged: a caller with no session (a unit test, a
+    read-only path) should not crash, and there is nothing to mint against.
+    """
+    if vault is None:
+        return text
+    for address in find_emails(text):
+        text = text.replace(address, vault.trust(address))
+    return text

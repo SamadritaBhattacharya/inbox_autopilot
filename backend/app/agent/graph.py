@@ -67,6 +67,7 @@ from app.manager.nodes import (
     build_context_gate_node,
     build_intake_node,
     build_planner_node,
+    build_reclassifier,
     build_router_node,
 )
 from app.manager.writer import build_reviser, build_writer_node
@@ -242,7 +243,18 @@ def build_manager_graph(
 
     graph = StateGraph(AgentState)
     graph.add_node("intake", build_intake_node(llm, emitter, vault))
-    graph.add_node("context_gate", build_context_gate_node(threshold=threshold))
+    graph.add_node(
+        "context_gate",
+        # The SAME vault intake uses. An address the human gives in ANSWER to the
+        # gate's own question has to become a usable token, or asking was pointless.
+        build_context_gate_node(
+            threshold=threshold,
+            vault=vault,
+            # Re-reads the whole conversation when an answer arrives, so a compound
+            # reply lands in the right slots instead of being copied into all of them.
+            reclassify=build_reclassifier(llm, emitter),
+        ),
+    )
     graph.add_node(ASK, build_ask_node())
     graph.add_node(ROUTER, build_router_node(llm, rules, emitter))
     graph.add_node(PLANNER, build_planner_node(llm, emitter))

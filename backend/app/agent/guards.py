@@ -45,7 +45,20 @@ MAX_REASONING_CHARS = 3000
 BUDGET_WARNING_STEPS = 5
 
 #: Verbs that are *meant* to repeat. Scrolling five times is reading, not looping.
-REPEATABLE_VERBS = frozenset({"Scroll", "WaitFor", "ReadThread", "Extract", "Recall", "Observe"})
+#: Verbs where repeating the IDENTICAL call is still progress. `Scroll(down)` twice moves
+#: twice; `WaitFor` twice waits longer. Both genuinely advance the run.
+#:
+#: `Extract` and `Recall` were once on this list and should not have been. They are pure
+#: reads with no side effects, which is why they looked harmless — but that also means an
+#: identical repeat returns an identical answer, so it cannot advance anything. Observed
+#: live: four identical `Extract("what is in the To field?")` calls in a row, invisible to
+#: this guard because of that exemption, each one a full LLM call against a provider that
+#: was already rate-limiting. "Read-only" is not the same as "free"; on a free tier the
+#: binding constraint is requests, not consequences.
+#:
+#: Different arguments stay safe either way — `action_signature` hashes the args, so two
+#: different Extract questions have different signatures and never count against each other.
+REPEATABLE_VERBS = frozenset({"Scroll", "WaitFor", "ReadThread", "Observe"})
 
 #: Verbs where the same verb on a DIFFERENT target is progress, not repetition. Archiving
 #: forty newsletters is the job; treating it as a loop would kill every triage run.

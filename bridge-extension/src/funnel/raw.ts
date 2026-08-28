@@ -88,6 +88,14 @@ export interface PageMeta {
   subjectFilled: boolean;
   bodyFilled: boolean;
   /**
+   * The `nodeId` of each compose field. The funnel resolves these to the `[N]` the model
+   * sees, so the agent is told where a field IS rather than re-finding it by name against a
+   * list that renumbers every turn.
+   */
+  toNode?: number | null;
+  subjectNode?: number | null;
+  bodyNode?: number | null;
+  /**
    * The open dialog's box, when there is one. Viewport-relative.
    *
    * Not for clicking — for PRIORITY. When a compose window is open its fields are the only

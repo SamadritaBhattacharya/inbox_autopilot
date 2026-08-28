@@ -8,6 +8,7 @@ that only works if the edges are not buried under node bodies.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 
 from langgraph.types import interrupt
@@ -18,10 +19,17 @@ from app.feedback.models import Feedback, FeedbackKind
 from app.feedback.store import FeedbackStore
 from app.llm.base import Message
 from app.manager.draft import Draft
+from app.security.patterns import TOKEN_RE
 from app.surface.base import EmailSurface
 from app.surface.dispatch import approval_fingerprint
 from app.telemetry.records import ErrorCode
-from app.workers.approval import Verdict, build_request, decision_from, is_gated
+from app.workers.approval import (
+    Verdict,
+    build_request,
+    decision_from,
+    draft_from_preview,
+    is_gated,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +111,114 @@ async def _record(
         logger.warning("could not record approval feedback", exc_info=True)
 
 
+#: An edit that is about WHO the mail goes to, rather than what it says.
+#:
+#: Deliberately requires an explicit phrase, not merely a token: an edit like "mention P5 in
+#: the first line" contains a token and is about the BODY. Guessing wrong here changes the
+#: recipient of an email, which is the one field where a wrong guess is unrecoverable.
+_RECIPIENT_EDIT = re.compile(
+    r"\b(recipient|addressee|to\s*field|send\s+(?:it\s+)?to|mail\s+(?:it\s+)?to)\b",
+    re.IGNORECASE,
+)
+
+
+def _recipient_change(instruction: str) -> str | None:
+    """The new recipient an edit asks for, as tokens — or `None` if it asks for no such thing.
+
+    **The gap this closes.** `Draft` holds subject, body and tone; the recipient lives in
+    `intent.slots`. So "change the recipient to P5" went to the reviser, which rewrites the
+    words, found nothing about the words to change, and `_stale_fields` named only subject
+    and body. The instruction was understood, acted on, and had no effect on who the mail was
+    addressed to — the human watched their correction be acknowledged and ignored.
+    """
+    if not _RECIPIENT_EDIT.search(instruction):
+        return None
+    tokens = list(dict.fromkeys(TOKEN_RE.findall(instruction)))
+    return ", ".join(tokens) or None
+
+
+def _replace_recipient(state: AgentState, tokens: str) -> str:
+    """Tell the worker to swap the recipient, in the terms Gmail actually needs.
+
+    Not "Clear the To field": a committed recipient is a CHIP, a separate node, and clearing
+    the input beside it leaves the chip in place — the new address would be added alongside
+    the old one and the mail would go to both. Removing the chip is its own click, and the
+    chip is in the element list where the worker can see it.
+    """
+    mail = getattr(state.observation, "mail", None)
+    index = getattr(mail, "to_index", None)
+    at = f" [{index}]" if index is not None else ""
+    return (
+        f"Do not send yet. The human changed the RECIPIENT to {tokens}.\n"
+        "  - Remove the recipient already in the To field by clicking the × on its "
+        "chip (it is in the list below).\n"
+        f"  - Then type {tokens} into the To field{at}.\n"
+        "Do NOT Clear the To field — that empties the input beside the chip and leaves "
+        "the old recipient attached, so the mail would go to both. Leave the subject "
+        "and body exactly as they are. Then propose sending again."
+    )
+
+
+def _stale_fields(before: Draft | None, after: Draft) -> list[str]:
+    """Which compose fields the browser now holds the WRONG text for."""
+    if before is None:
+        return ["subject", "body"]
+    changed = []
+    if before.subject.strip() != after.subject.strip():
+        changed.append("subject")
+    if before.body.strip() != after.body.strip():
+        changed.append("body")
+    return changed
+
+
+def _apply_revision(state: AgentState, before: Draft | None, after: Draft) -> str:
+    """Tell the worker exactly which fields to rewrite, and where they are.
+
+    **The instruction this replaces asked for something the agent cannot do.** "Retype only
+    the fields that changed" requires comparing the new draft against what is in the compose
+    window — and the worker is never shown field CONTENTS, by design, because a To field
+    holds an address and a body holds whatever was written. So "which changed?" was
+    unanswerable from its side. Cornered, it asked the human to type the body out again.
+
+    Two more things worked against it. The compose window still held the OLD text, and the
+    observation reported those fields as FILLED — where the standing rule is "a FILLED field
+    is done". The guard that stops a recipient being typed twice was, at that moment, the
+    thing preventing the human's own edit from ever being applied.
+
+    So the comparison happens HERE, where both drafts actually exist, and the result is
+    named: which fields, at which index, with an explicit licence to overwrite them.
+    """
+    stale = _stale_fields(before, after)
+    if not stale:
+        return (
+            "Do not send yet. Nothing in the draft actually changed — the compose window is "
+            "already correct. Propose sending again."
+        )
+
+    mail = getattr(state.observation, "mail", None)
+    where = {
+        "subject": getattr(mail, "subject_index", None),
+        "body": getattr(mail, "body_index", None),
+    }
+    lines = []
+    for field in stale:
+        index = where.get(field)
+        at = f" [{index}]" if index is not None else ""
+        lines.append(
+            f"  - {field.capitalize()}{at}: Clear it, then Type the new {field} exactly as "
+            "it appears above."
+        )
+
+    return (
+        "Do not send yet. The draft above has changed, and the compose window still holds "
+        "the OLD text.\n"
+        "Replace exactly these fields and nothing else:\n"
+        + "\n".join(lines)
+        + "\nThese fields will still show as FILLED — that means stale, not correct, "
+        "so overwrite them. Leave the recipient alone. Then propose sending again."
+    )
+
+
 def build_approval_gate_node(
     surface: EmailSurface,
     emitter: EventEmitter,
@@ -136,7 +252,12 @@ def build_approval_gate_node(
         # RESOLVED, from the executor: a human cannot verify "send to P17".
         preview = await surface.preview(call)
         request = build_request(
-            call, request_id=request_id, preview=preview, timeout_seconds=timeout_seconds
+            call,
+            request_id=request_id,
+            preview=preview,
+            timeout_seconds=timeout_seconds,
+            # So a Click on the Send button is described as a send, not as "Run Click".
+            observation=state.observation,
         )
 
         await emitter.approval_request(
@@ -183,6 +304,52 @@ def build_approval_gate_node(
             delta: dict = {"last_action": None}  # nothing is dispatched; the loop re-decides
             instruction = decision.edit
 
+            # The human retyped the draft themselves — use their words, exactly.
+            #
+            # No model call, and that is the point. Asked to fix a duplicated greeting, the
+            # reviser returned a body with the greeting deleted and the sign-off reworded;
+            # the user's complaint was that correcting one sentence rewrote the email. When
+            # somebody has typed the exact text they want, the only correct thing to do with
+            # it is use it. Falls through to the instruction path if the text does not parse,
+            # so a mangled preview never becomes a silently wrong draft.
+            # A recipient change is not a draft change, and has to be handled before the
+            # reviser is asked to rewrite words that are not what the human wanted altered.
+            if new_recipient := _recipient_change(instruction):
+                logger.info("recipient change requested: %s", new_recipient)
+                updated = state.intent
+                if updated is not None:
+                    updated = updated.with_slots(recipient_identity=new_recipient)
+                return {
+                    **delta,
+                    **({"intent": updated} if updated is not None else {}),
+                    "messages": [
+                        Message(role="user", content=_replace_recipient(state, new_recipient))
+                    ],
+                }
+
+            typed = decision.edited_preview.strip()
+            if typed and typed != request.preview.strip():
+                revised = draft_from_preview(
+                    typed,
+                    tone=state.draft.tone if isinstance(state.draft, Draft) else "professional",
+                )
+                if revised is not None:
+                    before = state.draft if isinstance(state.draft, Draft) else None
+                    logger.info(
+                        "draft replaced with the human's own text; stale: %s",
+                        ", ".join(_stale_fields(before, revised)) or "nothing",
+                    )
+                    return {
+                        **delta,
+                        "draft": revised,
+                        "messages": [
+                            Message(
+                                role="user",
+                                content=_apply_revision(state, before, revised),
+                            )
+                        ],
+                    }
+
             # Revise the DRAFT rather than hand the instruction to the loop.
             #
             # Told "change the last sentence", the worker retyped the whole body from
@@ -192,15 +359,15 @@ def build_approval_gate_node(
             # never asked for. Revising against the existing text changes what was asked and
             # returns everything else byte for byte.
             if revise is not None and isinstance(state.draft, Draft) and instruction:
-                delta["draft"] = await revise(state.draft, instruction)
+                before = state.draft
+                revised = await revise(before, instruction)
+                delta["draft"] = revised
                 delta["messages"] = [
                     Message(
                         role="user",
                         content=(
-                            f"Do not send yet. The human asked: {instruction}\n"
-                            "The draft above has been updated for you. Retype only the "
-                            "field that changed, leave the others alone, then propose "
-                            "sending again."
+                            f"The human asked: {instruction}\n"
+                            + _apply_revision(state, before, revised)
                         ),
                     )
                 ]

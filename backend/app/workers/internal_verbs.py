@@ -117,11 +117,25 @@ async def handle_internal(call: ActionCall, state: AgentState, emitter: EventEmi
     if call.name == "Extract":
         # Answered from the observation already in context — a read verb that needs no page
         # round trip, and no LLM call of its own.
+        #
+        # The reply has to say what is NOT knowable, or this verb becomes a trap. It used to
+        # answer "Answer from the element list above.", which is not an answer when the
+        # question is about a field's CONTENTS — those are deliberately never in an
+        # observation, because a To field holds an address and a body holds whatever the
+        # sender wrote. Asked "what is in the To field?", the model got a non-answer with no
+        # hint that the question was unanswerable, so it asked again. Four times, four LLM
+        # calls, on a free tier that was already returning 429s.
         return {
             "messages": [
                 Message(
                     role="tool",
-                    content="Answer from the element list above.",
+                    content=(
+                        "The element list above is everything visible. Field CONTENTS are "
+                        "never included — they carry private data — so no repeat of this "
+                        "question can answer it. For compose fields the view line already "
+                        "states FILLED or empty for To, Subject and Body; trust that and "
+                        "act. If you need something you genuinely cannot see, use AskUser."
+                    ),
                     tool_call_id=call.name,
                 )
             ]

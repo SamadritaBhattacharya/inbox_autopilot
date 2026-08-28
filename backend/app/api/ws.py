@@ -24,6 +24,7 @@ from app.config.container import AppContainer, build_container
 from app.events.current import bind as bind_emitter
 from app.events.protocol import AgentEvent
 from app.feedback.models import Feedback, FeedbackKind
+from app.security.vault import trust_addresses
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,9 @@ async def drive(run: Run, container: AppContainer, task: str, *, owner: str = "l
         run.mark_finished()
         return
     run.cleanup = close_surface
+    # The SAME vault the surface and the graph use. A correction typed mid-run is tokenized
+    # against it, so an address the user adds becomes a token the dispatcher will accept.
+    run.vault = getattr(surface, "vault", None)
 
     # Live browser frames. Best-effort: a run that works without a picture is still a working
     # run, so a screencast that cannot start must never take the run down with it.
@@ -250,6 +254,8 @@ async def ws_run(
                         {
                             "verdict": message.get("verdict"),
                             "edit": message.get("edit", ""),
+                            # The draft as the human retyped it, applied verbatim.
+                            "editedPreview": message.get("editedPreview", ""),
                             "reason": message.get("reason", ""),
                         }
                     )
@@ -279,6 +285,11 @@ async def ws_run(
                         # is the safe direction: a correction is only ever *shown* to the
                         # model, never treated as consent for anything.
                         feedback_kind = FeedbackKind.CORRECTION
+                    # Tokenize BEFORE anything stores or shows it. This is the same
+                    # trust boundary intake applies to the task: the user typed this
+                    # address, so it is addressable — and it must not reach the model, the
+                    # feedback store, or the promotion path in the clear.
+                    text = trust_addresses(text, run.vault)
                     await container.feedback.record(
                         Feedback(
                             thread_id=run.thread_id,

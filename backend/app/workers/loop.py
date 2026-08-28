@@ -50,6 +50,7 @@ from app.prompts import load_prompt
 from app.surface.base import EmailSurface, SurfaceUnavailable
 from app.telemetry.records import ErrorCode, StepRecord
 from app.workers.internal_verbs import handle_internal
+from app.workers.irreversible import is_irreversible
 from app.workers.rendering import observation_block, task_block
 from app.workers.tools import INTERNAL_VERBS
 
@@ -470,6 +471,46 @@ def build_act_node(
             }
 
         await emitter.action_result(result.success, result.reason, result.error_code)
+
+        # An irreversible action that SUCCEEDED ends the run. Right here, not eventually.
+        #
+        # Observed live, and it is the most dangerous behaviour this loop has produced: the
+        # mail was sent, Gmail returned to the inbox, and the agent — with no signal that
+        # the thing it existed to do was done — went looking for the Send button again,
+        # could not find it in an inbox, clicked Compose, and began writing THE SAME EMAIL
+        # a second time. One more approval and the recipient gets it twice.
+        #
+        # The rule is exactly as narrow as it needs to be: a human approved ONE irreversible
+        # action, that action reported success, so the run is over. Nothing after a send is
+        # work the human authorised. A failed send is deliberately excluded — that still
+        # needs the loop, to report or retry.
+        if result.success and is_irreversible(call, state.observation):
+            logger.info("%s completed — the run is done", call.name)
+            return {
+                **delta,
+                "last_result": result,
+                "finished": True,
+                "success": True,
+                "status": "done",
+                "reason": f"{call.name} completed: {result.reason}",
+                "messages": [
+                    Message(
+                        role="tool",
+                        content=f"ok: {result.reason}. The task is complete — do not repeat it.",
+                        tool_call_id=call.name,
+                    )
+                ],
+                "history": [
+                    StepRecord(
+                        step=state.step,
+                        node="act",
+                        worker=state.active_worker,
+                        action=call.name,
+                        success=True,
+                        undo=result.undo,
+                    )
+                ],
+            }
 
         return {
             **delta,

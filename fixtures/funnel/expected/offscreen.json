@@ -24,7 +24,10 @@
     "composeOpen": false,
     "toFilled": false,
     "subjectFilled": false,
-    "bodyFilled": false
+    "bodyFilled": false,
+    "toIndex": null,
+    "subjectIndex": null,
+    "bodyIndex": null
   },
   "screenshotRef": null,
   "changed": null,

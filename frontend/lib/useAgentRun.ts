@@ -171,8 +171,11 @@ export function useAgentRun(threadId: string, task?: string) {
   );
 
   const decide = useCallback(
-    (verdict: "approve" | "edit" | "reject", edit?: string) => {
-      send({ type: "decision", verdict, edit: edit ?? "" });
+    (verdict: "approve" | "edit" | "reject", edit?: string, editedPreview?: string) => {
+      // `editedPreview` is the draft as the human retyped it. The backend applies it
+      // verbatim — no model call — so "change this one sentence" cannot come back as a
+      // rewritten email.
+      send({ type: "decision", verdict, edit: edit ?? "", editedPreview: editedPreview ?? "" });
       setStatus("running");
       if (pendingApproval) setAnswered((seen) => new Set(seen).add(pendingApproval.requestId));
     },

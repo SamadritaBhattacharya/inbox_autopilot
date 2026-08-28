@@ -214,30 +214,143 @@ EXTRACT_JS = """
   // chip — a separate node — so the input itself reads empty and the agent types the address
   // again on top of the first. Reporting "filled" is the difference between an agent that
   // knows what is left to do and one that guesses.
-  function filled(root, selectors) {
+  //
+  // **Every one of these checks is SCOPED, and that scoping is the whole correctness.** An
+  // unscoped selector run against the compose dialog finds the wrong element with total
+  // confidence, and the agent then behaves perfectly on a false premise — which is far
+  // harder to debug than an agent that misbehaves. Two real instances, both fixed here:
+  //
+  //   * `toFilled` searched the whole dialog for anything chip-shaped, and matched the FROM
+  //     row — the signed-in user's OWN address, marked up identically to a recipient. Every
+  //     fresh compose reported its recipient as already entered, so the agent skipped it and
+  //     proposed sending mail addressed to nobody.
+  //   * `bodyFilled` used a bare `textarea` selector. Gmail's recipient field IS a textarea
+  //     in some versions, so typing a recipient made the BODY report filled — and the agent
+  //     would then skip writing the body and send an empty email.
+  //
+  // Both are the same mistake: asking "is there anything like this in the dialog?" when the
+  // question is "is there anything in THIS field?".
+  function textOf(el) {
+    if (!el) return '';
+    return ((el.value !== undefined ? el.value : el.innerText) || '').trim();
+  }
+  function filledWithin(root, selectors, excluded) {
     if (!root) return false;
     for (const selector of selectors) {
       for (const el of root.querySelectorAll(selector)) {
-        const text = (el.value !== undefined ? el.value : el.innerText) || '';
-        if (text.trim()) return true;
+        // Never let one field's content answer for another's.
+        if (excluded && excluded !== el && excluded.contains(el)) continue;
+        if (textOf(el)) return true;
       }
     }
     return false;
   }
-  const toFilled = composeOpen && (
-    filled(dialogEl, ['[name="to"]', 'input[aria-label*="To"]', 'textarea[name="to"]']) ||
+
+  // Widened for the Gmail that actually ships. These were written against a simplified
+  // model — `input[aria-label*="To"]` requires an <input> tag, and Gmail's To field is a
+  // `div[role="combobox"]`. The selector missed, `toInput` fell through to a nearby LABEL,
+  // and the observation reported the To field at the label's index. Same miss for the
+  // subject, which simply came back "not found" and sent the agent scrolling for a field
+  // that was on screen the whole time.
+  //
+  // Tag-agnostic and role-aware from here on: match what the element IS, not what tag a
+  // 2015 mail client would have used for it.
+  const TO_SELECTORS = [
+    '[name="to"]',
+    'textarea[name="to"]',
+    '[role="combobox"][aria-label*="To" i]',
+    '[aria-label*="To recipients" i]',
+  ];
+
+  // Tried IN ORDER, one selector at a time — never comma-joined.
+  //
+  // `querySelector('a, b')` returns whichever element comes first in the DOCUMENT, not
+  // whichever selector was listed first. Gmail puts a "To - Select contacts" LINK above the
+  // real recipient field, so a loose fallback in the list won every time and the carefully
+  // ordered specific selectors never got a look in. `toInput` became that link,
+  // `recipientArea()` walked up from it into a region containing the FROM row, the sender's
+  // own address was found there, and a brand-new compose window reported its recipient as
+  // already entered. The agent then correctly skipped the recipient and sent nothing to
+  // nobody.
+  //
+  // Ordering only means something if each selector is tried on its own.
+  function firstMatch(root, selectors) {
+    if (!root) return null;
+    for (const selector of selectors) {
+      const found = root.querySelector(selector);
+      if (found) return found;
+    }
+    return null;
+  }
+  const toInput = firstMatch(dialogEl, TO_SELECTORS);
+
+  // The recipients ROW: the input plus the chips beside it, and nothing else.
+  function recipientArea() {
+    if (!toInput) return null;
+    // Up to the row holding the input and its chips. Gmail nests these a few levels; four
+    // reaches the recipients row without escaping into the header that holds From. The
+    // `!== dialogEl` guard stops it swallowing the whole dialog when the input sits shallow.
+    let node = toInput;
+    for (let i = 0; i < 4 && node.parentElement && node.parentElement !== dialogEl; i++) {
+      node = node.parentElement;
+    }
+    return node;
+  }
+  const toArea = recipientArea();
+
+  // No To input found -> report EMPTY, never filled. The two mistakes are not equal:
+  // "empty" when it is full makes the agent type a duplicate, which it can see in the next
+  // observation and fix; "full" when it is empty makes it skip the recipient silently and
+  // there is nothing downstream that can notice. When unsure, choose the recoverable error.
+  const toFilled = composeOpen && !!toInput && (
+    // The input's OWN value first: when the To field sits directly under the dialog,
+    // `toArea` IS that input, and `querySelectorAll` never returns its own root.
+    !!textOf(toInput) ||
+    filledWithin(toArea, TO_SELECTORS) ||
     // The chip case: a committed recipient leaves the input empty and a removable pill
-    // beside it. This is the one that was being missed.
-    !!(dialogEl && dialogEl.querySelector(
+    // beside it — now looked for only WHERE a recipient can actually be.
+    !!(toArea && toArea.querySelector(
       '[data-hovercard-id], [email], .afV, [role="option"][aria-selected="true"]'
     ))
   );
-  const subjectFilled = composeOpen && filled(dialogEl, [
-    '[name="subjectbox"]', 'input[aria-label*="Subject"]', 'input[name="subject"]'
-  ]);
-  const bodyFilled = composeOpen && filled(dialogEl, [
-    '[g_editable="true"]', '[contenteditable="true"]', 'textarea'
-  ]);
+  const SUBJECT_SELECTORS = [
+    '[name="subjectbox"]',
+    '[name="subject"]',
+    '[aria-label*="Subject" i]',
+    '[placeholder*="Subject" i]',
+  ];
+  const subjectFilled = composeOpen && filledWithin(dialogEl, SUBJECT_SELECTORS, toArea);
+  // Recipient fields excluded by selector AND by region. An address typed into To must
+  // never make the body look written.
+  const BODY_SELECTORS = [
+    '[g_editable="true"]',
+    '[aria-label*="Message Body" i]',
+    '[role="textbox"][aria-label*="Body" i]',
+    '[contenteditable="true"]:not([role="combobox"])',
+    'textarea:not([name="to"]):not([name="cc"]):not([name="bcc"])'
+  ];
+  const bodyFilled = composeOpen && filledWithin(dialogEl, BODY_SELECTORS, toArea);
+
+  // WHERE each field is, as the node id this walk already assigned. The funnel turns these
+  // into the `[N]` the model sees, so the agent is told the number instead of hunting for
+  // it in a list that renumbers every turn.
+  //
+  // `ids` only holds elements the walk kept, so a field pruned as uninteresting resolves to
+  // null rather than to a number that indexes nothing — the agent is told "not on screen",
+  // which is true and actionable, instead of being handed a lie.
+  function nodeIdOf(selectors, scope) {
+    const root = scope || dialogEl;
+    if (!root) return null;
+    for (const selector of selectors) {
+      for (const el of root.querySelectorAll(selector)) {
+        if (ids.has(el)) return ids.get(el);
+      }
+    }
+    return null;
+  }
+  const toNode = composeOpen && toInput && ids.has(toInput) ? ids.get(toInput) : null;
+  const subjectNode = composeOpen ? nodeIdOf(SUBJECT_SELECTORS) : null;
+  const bodyNode = composeOpen ? nodeIdOf(BODY_SELECTORS) : null;
 
   return {
     elements: out,
@@ -252,6 +365,9 @@ EXTRACT_JS = """
       toFilled,
       subjectFilled,
       bodyFilled,
+      toNode,
+      subjectNode,
+      bodyNode,
       focusBox: composeOpen
         ? { x: composeBox.left, y: composeBox.top,
             width: composeBox.width, height: composeBox.height }
@@ -350,5 +466,8 @@ def parse_meta(raw: dict[str, Any], *, thread_ref: str | None = None) -> PageMet
         to_filled=bool(raw.get("toFilled")),
         subject_filled=bool(raw.get("subjectFilled")),
         body_filled=bool(raw.get("bodyFilled")),
+        to_node=raw.get("toNode"),
+        subject_node=raw.get("subjectNode"),
+        body_node=raw.get("bodyNode"),
         focus_box=focus_box,
     )

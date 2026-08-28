@@ -70,3 +70,52 @@ async def test_frames_are_handed_back_to_the_server_loop():
         assert seen == [server_loop], "the frame callback ran on the wrong loop"
     finally:
         await browser_loop.shutdown()
+
+
+# ── the proxy must implement the WHOLE port ─────────────────────────────────
+
+
+def test_the_proxy_implements_every_method_the_port_declares():
+    """The bug this exists to prevent, generalised.
+
+    `preview` was missing here. The approval gate called it, this proxy did not have it,
+    and every gated action on Windows died with `AttributeError` at the exact moment a
+    human was about to be shown what they were approving — so no send had ever completed
+    on that path. Nothing caught it: the tests drive `FakeEmailSurface`, which implements
+    the full port, and this wrapper exists only on the Windows path.
+
+    Checking against the protocol itself rather than a hand-written list means a FIFTH
+    method added to `EmailSurface` fails here, in CI, instead of on a real mailbox.
+    """
+    from app.surface.base import EmailSurface
+
+    required = {
+        name
+        for name in EmailSurface.__protocol_attrs__
+        if not name.startswith("_")
+    }
+    missing = {name for name in required if not hasattr(ThreadedSurface, name)}
+
+    assert not missing, f"ThreadedSurface does not forward: {sorted(missing)}"
+
+
+async def test_preview_is_forwarded_onto_the_browser_loop():
+    """`preview` reads the live compose fields, so it touches Playwright and must change
+    threads like every other page-touching call."""
+    from inbox_contracts import ActionCall
+
+    browser_loop = BrowserLoop()
+    ran_on: list[asyncio.AbstractEventLoop] = []
+
+    class FakeSurface:
+        async def preview(self, call):
+            ran_on.append(asyncio.get_running_loop())
+            return "To: someone\nSubject: hi"
+
+    surface = ThreadedSurface(FakeSurface(), browser_loop)
+    try:
+        text = await surface.preview(ActionCall(name="Send", args={"index": 9}))
+        assert text.startswith("To:")
+        assert ran_on == [browser_loop.loop], "preview ran on the wrong thread"
+    finally:
+        await browser_loop.shutdown()
