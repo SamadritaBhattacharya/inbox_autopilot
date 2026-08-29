@@ -20,6 +20,8 @@ from app.feedback.models import Feedback, FeedbackKind
 from app.feedback.store import FeedbackStore
 from app.llm.base import Message
 from app.manager.draft import Draft
+from app.manager.instruction import Classifier, EditScope
+from app.manager.slots import split_recipients
 from app.security.patterns import TOKEN_RE
 from app.security.vault import trust_addresses
 from app.surface.base import EmailSurface
@@ -40,6 +42,10 @@ logger = logging.getLogger(__name__)
 #: Built by `build_reviser` in `manager.writer`; a plain callable here so the gate depends on
 #: the capability rather than on the writer module.
 Reviser = Callable[[Draft, str], Awaitable[Draft]]
+
+#: Writes a REPLACEMENT draft when the human rejects the words rather than correcting them.
+#: Returns `None` on failure, so a bad rewrite leaves the existing draft standing.
+Rewriter = Callable[[AgentState, str], Awaitable[Draft | None]]
 
 #: Which feedback kind each verdict is. The gate is the only place in the system where a
 #: human passes explicit judgement on a *specific proposed action*, which makes it the
@@ -168,24 +174,60 @@ def _retyped_recipient(shown: str, edited: str, vault) -> str | None:
         # leaving it: the loop asks.
         logger.info("the human emptied the To line in the approval box")
         return None
-    return trust_addresses(now.strip(), vault)
+
+    minted = trust_addresses(now.strip(), vault)
+
+    # Normalize to the canonical `"P1, P3"` form, exactly as `_recipient_change` does.
+    #
+    # **The separator the human used must not survive this function.** `trust_addresses`
+    # mints by string replacement, so it preserves whatever they typed between the
+    # addresses — a SPACE, when somebody adds a second recipient the natural way. That
+    # produced the slot `"P1 P3"`, an instruction to type `P1 P3`, and a dispatcher that
+    # could not read it as tokens; the literal characters went into Gmail's To field. One
+    # of the two producers of this value normalized and the other did not, which is the
+    # whole bug.
+    #
+    # `split_recipients` rather than a token scan, because a recipient is not always a
+    # token: pulling only the tokens out of "Biyash, alex@corp.com" would return the minted
+    # address and SILENTLY DROP the person named by name. Nothing typed into this line may
+    # disappear — a name is kept whole (Gmail's To field autocompletes from contacts, which
+    # is how a person does it) and only whitespace BETWEEN tokens is treated as a
+    # separator, so "Priya Nair" stays one person.
+    people = split_recipients(minted)
+    return ", ".join(people) if people else minted
+
+
+def _fallback_scope(new_recipient: str | None) -> EditScope:
+    """What an unclassifiable instruction is treated as.
+
+    Exactly the rule that shipped before the classifier existed, so a provider outage costs
+    the new routing and nothing else: an instruction that changes the recipient has no words
+    to revise, and anything else is an adjustment. Never `rewrite` — a failed call must not
+    be able to throw away an email a human is midway through approving.
+    """
+    return EditScope(kind="none" if new_recipient else "adjust")
 
 
 def _recipient_lines(state: AgentState, tokens: str) -> list[str]:
     """How to swap the recipient, in the terms Gmail actually needs.
 
-    Not "Clear the To field": a committed recipient is a CHIP, a separate node, and clearing
-    the input beside it leaves the chip in place — the new address would be added alongside
-    the old one and the mail would go to both. Removing the chip is its own click, and the
-    chip is in the element list where the worker can see it.
+    **Two actions, both of which exist.** This used to say "click the × on its chip (it is
+    in the list below)", and the list below never contained it: a committed recipient is a
+    chip with no accessible name, so it does not survive the funnel. The agent scrolled six
+    times, ran Extract twice, then asked the human for the index number of a button nobody
+    can see. It had no legal move, because the one we named was imaginary.
+
+    `Clear` on the To field now removes the chips itself (`_clear_recipients`), which is
+    what the old "Do NOT Clear the To field" warning was working around. The warning is
+    gone with the reason for it.
     """
     mail = getattr(state.observation, "mail", None)
     index = getattr(mail, "to_index", None)
     at = f" [{index}]" if index is not None else ""
     return [
-        "  - Remove the recipient already in the To field by clicking the × on its "
-        "chip (it is in the list below).",
-        f"  - Then type {tokens} into the To field{at}.",
+        f"  - Clear the To field{at}. That removes every recipient already on the draft, "
+        "chips included — you do not need to find or click anything.",
+        f"  - Then Type {tokens} into the To field{at}.",
     ]
 
 
@@ -207,19 +249,36 @@ def _stale_fields(before: Draft | None, after: Draft) -> list[str]:
 
 
 def _draft_lines(state: AgentState, before: Draft | None, after: Draft) -> list[str]:
-    """Which compose fields to rewrite, and where they are. Empty when nothing changed."""
+    """Which compose fields to rewrite, where they are, and THE TEXT ITSELF.
+
+    **"Type the new body exactly as it appears above" is what this replaces, and "above" is
+    why the human's edit was cleared and then retyped identically.** Two versions of the
+    email were above: the corrected draft rendered at the top of the prompt, and the
+    worker's OWN earlier `Type(text=…)` call carrying the old body, sitting in the history
+    immediately before this instruction. It copied the nearer one. The words came back
+    unchanged, and every mechanical part of the edit — parse, diff, clear, retype — had
+    worked perfectly.
+
+    A pointer into a conversation is not a reliable reference when the conversation holds
+    an older copy of the same thing. So the text to type is carried HERE, next to the
+    instruction to type it, and there is nothing left to resolve.
+    """
     mail = getattr(state.observation, "mail", None)
     where = {
         "subject": getattr(mail, "subject_index", None),
         "body": getattr(mail, "body_index", None),
     }
+    values = {"subject": after.subject, "body": after.body}
     lines = []
     for field in _stale_fields(before, after):
         index = where.get(field)
         at = f" [{index}]" if index is not None else ""
         lines.append(
-            f"  - {field.capitalize()}{at}: Clear it, then Type the new {field} exactly as "
-            "it appears above."
+            f"  - {field.capitalize()}{at}: Clear it, then Type EXACTLY the text between "
+            f"the markers below — not the markers themselves.\n"
+            f"--- begin {field} ---\n"
+            f"{values[field]}\n"
+            f"--- end {field} ---"
         )
     return lines
 
@@ -260,8 +319,8 @@ def _correction_message(
     trailers = []
     if recipient:
         trailers.append(
-            "Do NOT Clear the To field — that empties the input beside the chip and leaves "
-            "the old recipient attached, so the mail would go to both."
+            "Do NOT type the new recipient on top of the old one — Clear first, or the "
+            "mail goes to both."
         )
         if after is None:
             trailers.append("Leave the subject and body exactly as they are.")
@@ -269,6 +328,13 @@ def _correction_message(
         trailers.append(
             "These fields will still show as FILLED — that means stale, not correct, "
             "so overwrite them."
+        )
+        # The history still holds the worker's own earlier `Type` call carrying the old
+        # body, and that copy is nearer to this instruction than the corrected draft at the
+        # top of the prompt. Saying which one is dead is cheaper than hoping it picks right.
+        trailers.append(
+            "Any earlier version of this email in this conversation is superseded — do "
+            "not copy text from an earlier Type call."
         )
         if recipient is None:
             trailers.append("Leave the recipient alone.")
@@ -310,6 +376,8 @@ def build_approval_gate_node(
     *,
     timeout_seconds: int = 600,
     revise: Reviser | None = None,
+    rewrite: Rewriter | None = None,
+    classify: Classifier | None = None,
     feedback: FeedbackStore | None = None,
     vault=None,
 ):
@@ -436,27 +504,66 @@ def build_approval_gate_node(
                 # retyped email became "Change it: " and then nothing at all.
                 unreadable = revised is None
 
-            # Revise the DRAFT rather than hand the instruction to the loop.
+            # ── what the instruction is asking for ──
             #
-            # Told "change the last sentence", the worker retyped the whole body from
-            # scratch, and it never came back the same: a greeting the human had already
-            # approved would quietly acquire new punctuation, a sentence they liked would be
-            # "improved". They then had to re-read the entire email to find an edit they
-            # never asked for. Revising against the existing text changes what was asked and
-            # returns everything else byte for byte.
+            # Classified before anything acts on it, because "instruction" covers four
+            # different jobs and handing all four to the reviser served exactly one. The
+            # classifier judges the WORDS only; who the mail goes to was settled above by a
+            # deterministic check, and a model must not be able to retarget an email.
             #
-            # Skipped when the instruction was ABOUT the recipient — there are no words to
-            # rewrite — and when the human has already typed the exact draft they want.
+            # The base is the human's own retyped text when they gave some — an instruction
+            # typed alongside an edit applies ON TOP of what they wrote, not instead of it.
             asked_in_words = ""
-            if (
-                revised is None
-                and instruction
-                and not new_recipient
-                and revise is not None
-                and before is not None
-            ):
-                revised = await revise(before, instruction)
-                asked_in_words = f"The human asked: {instruction}\n"
+            note = ""
+            base = revised if revised is not None else before
+            if instruction:
+                scope = await classify(instruction) if classify else None
+                if scope is None:
+                    scope = _fallback_scope(new_recipient)
+
+                if scope.kind == "rewrite" and revised is not None:
+                    # They typed the draft AND asked for a rewrite. Their own words win, and
+                    # the instruction is applied on top of them.
+                    #
+                    # Nothing else in this gate is allowed to discard text a human typed
+                    # verbatim, and a classification is a judgement call — the one place it
+                    # could destroy something irreplaceable is here, so it does not get to.
+                    logger.info("rewrite downgraded to an adjustment: the human typed the draft")
+                    scope = EditScope(kind="adjust")
+
+                if scope.kind == "adjust" and revise is not None and base is not None:
+                    # Revise the DRAFT rather than hand the instruction to the loop.
+                    #
+                    # Told "change the last sentence", the worker retyped the whole body
+                    # from scratch, and it never came back the same: a greeting the human
+                    # had already approved would quietly acquire new punctuation, a sentence
+                    # they liked would be "improved". They then had to re-read the entire
+                    # email to find an edit they never asked for. Revising against the
+                    # existing text changes what was asked and returns the rest byte for
+                    # byte.
+                    revised = await revise(base, instruction)
+                    asked_in_words = f"The human asked: {instruction}\n"
+
+                elif scope.kind == "rewrite" and rewrite is not None:
+                    # They are rejecting the words, not correcting them. The reviser's
+                    # prompt preserves what it was given, which is the opposite of what was
+                    # asked — so this goes back through the writer with a clean slate.
+                    fresh = await rewrite(state, scope.brief or instruction)
+                    if fresh is not None:
+                        revised = fresh
+                    asked_in_words = f"The human asked for a different email: {instruction}\n"
+
+                elif scope.kind == "question":
+                    # A question acted on as a command silently edits an email over
+                    # something the human only wanted explained.
+                    note = (
+                        f'The human asked a question rather than requesting a change: '
+                        f'"{instruction}". Answer it with AskUser. Do NOT change the '
+                        "draft. Then propose sending again."
+                    )
+
+            if note and not (new_recipient or revised is not None):
+                return {**delta, "messages": [Message(role="user", content=note)]}
 
             if new_recipient or revised is not None:
                 logger.info(
@@ -480,7 +587,11 @@ def build_approval_gate_node(
                                 recipient=new_recipient,
                                 before=before,
                                 after=revised,
-                            ),
+                            )
+                            # A question asked alongside a change is still a question. It
+                            # rides with the correction rather than being dropped, which is
+                            # what "answer it OR act on it" would do to a compound edit.
+                            + (f"\n{note}" if note else ""),
                         )
                     ],
                 }

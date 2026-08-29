@@ -177,3 +177,67 @@ async def test_several_committed_chips_still_report_filled(page):
     """The multi-recipient case: two chips is still "the To field has people in it"."""
     two = CHIP + CHIP.replace("priya@corp.com", "alex@corp.com").replace("Priya", "Alex")
     assert await _to_filled(page, _page_html(chips=two)) is True
+
+
+# ── the POST-TYPE check must agree with the extractor ───────────────────────
+#
+# The extractor above decides `toFilled`. `_field_has_content` decides whether the Type
+# action that just ran SUCCEEDED. They were asking two different questions about one fact,
+# and the disagreement is what made the agent type an address, watch it vanish, and type it
+# again: committing a recipient with Enter moves the text out of the input and into a chip,
+# so a value-based read saw an empty field and reported `TYPE_DID_NOT_LAND` for a write that
+# had just worked.
+#
+# Called for real, on a real page, rather than reimplemented here — a Python copy of the
+# logic would only prove that two copies of my own reasoning agree.
+
+
+def _surface(page):
+    """A surface bound to nothing but this page. `_field_has_content` uses only `_page`."""
+    from app.surface.playwright_surface import PlaywrightEmailSurface
+
+    surface = PlaywrightEmailSurface.__new__(PlaywrightEmailSurface)
+    surface._page = page
+    return surface
+
+
+async def _has_content(page, html: str, field: str = "to"):
+    await page.set_content(f"<body>{html}</body>")
+    return await _surface(page)._field_has_content(field)
+
+
+async def test_a_committed_chip_counts_as_content(page):
+    """THE regression. After Enter the input is empty and the chip holds the address."""
+    assert await _has_content(page, _page_html(chips=CHIP)) is True
+
+
+async def test_typed_but_uncommitted_text_counts_as_content(page):
+    assert await _has_content(page, _page_html(to_value="priya@corp.com")) is True
+
+
+async def test_a_chip_AND_leftover_text_counts_once(page):
+    assert await _has_content(page, _page_html(chips=CHIP, to_value="alex@corp.com")) is True
+
+
+async def test_an_empty_recipient_is_never_a_CONFIDENT_failure(page):
+    """`None`, not `False`, and the difference is the whole bug.
+
+    The chip query returns nothing both for "no recipient" and for "no dialog to read", so
+    this cannot tell them apart — and this file's standing rule is that only a confident
+    False fails an action. A recipient that genuinely did not land is caught by the next
+    observation, where `toFilled` says so.
+    """
+    assert await _has_content(page, _page_html()) is None
+
+
+async def test_no_dialog_at_all_is_unknown_rather_than_failed(page):
+    assert await _has_content(page, "<div>not a compose window</div>") is None
+
+
+async def test_the_other_fields_still_read_their_own_value(page):
+    """The special case is the To field ONLY — subject and body have no chips."""
+    html = _page_html(chips=CHIP).replace(
+        '<input name="subjectbox" value="">', '<input name="subjectbox" value="Friday demo">'
+    )
+    assert await _has_content(page, html, "subject") is True
+    assert await _has_content(page, html, "body") is False

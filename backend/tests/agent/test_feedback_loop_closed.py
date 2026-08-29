@@ -111,6 +111,9 @@ async def test_editing_records_a_CORRECTION_so_promotion_can_count_it():
     store = InMemoryFeedbackStore()
     llm = compose_llm(
         [
+            # The instruction is classified before it is acted on: "add regards" adjusts
+            # the words that are already there.
+            ok('{"kind": "adjust", "brief": ""}'),
             ok("Revised."),
             acts("Complete", "Done.", success=True, reason="sent"),
         ]

@@ -9,12 +9,29 @@ performs it; if it changes what the RUN KNOWS, this module does.
 """
 from __future__ import annotations
 
+import re
+
 from inbox_contracts import ActionCall
 from langgraph.types import interrupt
 
 from app.agent.state import AgentState
 from app.events.emitter import EventEmitter
 from app.llm.base import Message
+
+#: A question that only the system can answer, aimed at a person.
+#:
+#: Narrow on purpose. "Which email did you mean?" and "should this go to Priya or to Alex?"
+#: are exactly what `AskUser` is for; only questions about our OWN bookkeeping are refused,
+#: and the wording has to be about the number itself rather than merely near one.
+_ASKS_FOR_INTERNALS = re.compile(
+    r"\b(index|indices)\b|\[\s*n\s*\]|\belement (?:id|number)\b|\bbackend ?node\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_for_internals(question: str) -> bool:
+    """Is this a question the human cannot possibly answer?"""
+    return bool(_ASKS_FOR_INTERNALS.search(question))
 
 
 async def handle_internal(call: ActionCall, state: AgentState, emitter: EventEmitter) -> dict:
@@ -101,6 +118,38 @@ async def handle_internal(call: ActionCall, state: AgentState, emitter: EventEmi
         # re-enters this node with the answer. Nothing is parked in memory, so the run
         # survives a disconnect while it waits.
         question = str(args.get("question") or "").strip() or "What would you like me to do?"
+
+        if _asks_for_internals(question):
+            # ── never ask a person for a number only we can see ──
+            #
+            # Observed live, and it is the worst question this system has ever asked:
+            # "What is the index number of the remove (×) button for the recipient chip?"
+            # Indices are ours. They are rebuilt every turn by design, they appear in no
+            # interface the human has, and the person on the other end had already watched
+            # the agent scroll six times looking for the answer themselves.
+            #
+            # Refused here rather than discouraged in the prompt, because the prompt was
+            # already the thing that did not hold. Refusing costs one turn and returns a
+            # usable alternative; asking costs the human's trust and still gets no answer.
+            return {
+                "messages": [
+                    Message(
+                        role="tool",
+                        content=(
+                            "Not asked — that question is unanswerable. Element indices are "
+                            "internal: they are rebuilt every turn and the person has never "
+                            "seen one. Nor can they see the element list. Ask about what is "
+                            "on THEIR screen, in their words ('is this going to the right "
+                            "person?'), or find the element yourself in the list above. If "
+                            "an element is not in the list, it did not survive the "
+                            "observation and no amount of scrolling will produce it — use a "
+                            "verb that does the job directly instead."
+                        ),
+                        tool_call_id=call.name,
+                    )
+                ]
+            }
+
         await emitter.activity("waiting", "asking you a question")
         answer = interrupt({"question": question, "missing": [], "task": state.task})
         return {

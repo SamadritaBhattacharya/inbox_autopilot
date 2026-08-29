@@ -127,6 +127,51 @@ def build_writer_node(llm: LLMClient, emitter: EventEmitter | None = None):
     return writer
 
 
+def build_rewriter(llm: LLMClient, emitter: EventEmitter | None = None):
+    """Write a REPLACEMENT email, when the human asked for a different one.
+
+    Distinct from the reviser, and the difference is which prompt is doing the work. The
+    reviser is told to return everything it was not asked to change byte for byte — exactly
+    wrong for "scrap this and write about the Q3 numbers instead", where the existing words
+    are what the human is rejecting. Handed that, it produces a hedged edit of a message
+    nobody wants.
+
+    So a rewrite goes back through the WRITER's prompt with the original request plus what
+    they have now said, and the old draft is not shown to it at all. Returns `None` on a
+    failure so the caller can keep the draft it already has: a failed rewrite must never
+    leave the human with an empty email.
+    """
+
+    async def rewrite(state: AgentState, instruction: str) -> Draft | None:
+        brief = "\n".join(
+            [
+                brief_for(state),
+                "",
+                f"The person has read a first attempt and asked for something different: "
+                f"{instruction}",
+                "Write the new email. Do not refer to the earlier attempt.",
+            ]
+        )
+        result = await llm.complete(
+            role="executor",
+            messages=[
+                Message(role="system", content=_WRITER_SYSTEM, cacheable=True),
+                Message(role="user", content=brief),
+            ],
+        )
+        draft = _parse_draft(result.text or result.reasoning)
+        if draft is None:
+            logger.warning("rewrite produced no usable draft; keeping the current one")
+            return None
+
+        logger.info("rewrote as %r (tone=%s)", draft.subject, draft.tone)
+        if emitter is not None:
+            await emitter.draft(draft.subject, draft.body, draft.tone)
+        return draft
+
+    return rewrite
+
+
 def build_reviser(llm: LLMClient, emitter: EventEmitter | None = None):
     """Apply one human correction to an existing draft, changing only what was asked.
 

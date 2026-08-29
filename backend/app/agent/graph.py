@@ -62,6 +62,7 @@ from app.events.emitter import EventEmitter
 from app.events.sink import NullSink
 from app.feedback.store import FeedbackStore
 from app.llm.base import LLMClient
+from app.manager.instruction import build_edit_classifier
 from app.manager.intent import Action
 from app.manager.nodes import (
     build_context_gate_node,
@@ -70,7 +71,7 @@ from app.manager.nodes import (
     build_reclassifier,
     build_router_node,
 )
-from app.manager.writer import build_reviser, build_writer_node
+from app.manager.writer import build_reviser, build_rewriter, build_writer_node
 from app.recovery.registry import CuratedSkillRegistry
 from app.rules.store import InMemoryRulesStore, RulesStore
 from app.surface.base import EmailSurface
@@ -289,6 +290,12 @@ def build_manager_graph(
                 # So "change the last sentence" edits that sentence instead of
                 # regenerating the whole email.
                 revise=build_reviser(llm, emitter),
+                # "scrap this and write about X instead" rejects the words rather than
+                # correcting them, and the reviser's prompt is built to preserve them.
+                rewrite=build_rewriter(llm, emitter),
+                # Which of those two — or neither — the instruction is actually asking
+                # for. One small call, and only when a human has typed something.
+                classify=build_edit_classifier(llm),
                 # Approve/edit/reject are the only place a human judges a SPECIFIC
                 # proposed action. Recording them is what gives the promotion path
                 # anything to count.

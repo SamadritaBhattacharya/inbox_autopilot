@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { changeSummary, diffLines, toHunks } from "@/lib/diff";
 import type { PendingApproval } from "@/lib/types";
 
 /**
@@ -48,8 +49,19 @@ export function ApprovalCard({
   // something a remount does for free — and, more to the point, an effect can only reset
   // what it is told changed. Identity belongs to the ask.
   const [draft, setDraft] = useState(approval.preview);
+  const [showDiff, setShowDiff] = useState(true);
   const tone = TONE[approval.kind as keyof typeof TONE] ?? TONE.bulk;
   const destructive = approval.kind === "delete";
+
+  // Against what the human was shown LAST time, not against what they are typing now —
+  // this answers "what did my last correction actually do", which is the question the
+  // second card leaves you with. Memoized because it is O(n × m) over the two versions.
+  const rows = useMemo(
+    () => diffLines(approval.previousPreview, approval.preview),
+    [approval.previousPreview, approval.preview],
+  );
+  const hunks = useMemo(() => (rows ? toHunks(rows) : null), [rows]);
+  const changed = useMemo(() => changeSummary(rows ?? []), [rows]);
 
   const rewritten = draft.trim() !== approval.preview.trim();
 
@@ -92,6 +104,54 @@ export function ApprovalCard({
       </header>
 
       <p className="px-4 pt-1.5 text-[14px] font-medium text-text">{approval.summary}</p>
+
+      {/* What moved since the last time this was asked.
+        *
+        * An edit brings back the whole email, and finding your own correction in it meant
+        * re-reading all of it. Nothing here is applied — the full text is editable below;
+        * this is a reading aid, shown open because seeing the change is the point. */}
+      {hunks && (
+        <div className="mx-4 mt-3 overflow-hidden rounded-[--radius-control] border border-line">
+          <button
+            type="button"
+            onClick={() => setShowDiff(!showDiff)}
+            className="transition-smooth flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-[10px] text-faint hover:text-muted"
+            aria-expanded={showDiff}
+          >
+            <span>what changed</span>
+            {changed.added > 0 && <span className="text-good">+{changed.added}</span>}
+            {changed.removed > 0 && <span className="text-danger">−{changed.removed}</span>}
+            <span className="ml-auto">{showDiff ? "hide" : "show"}</span>
+          </button>
+          {showDiff && (
+            <div className="scroll-area max-h-48 overflow-auto border-t border-line bg-ink px-3 py-2 font-mono text-[11px] leading-relaxed">
+              {hunks.map((row, position) =>
+                row === null ? (
+                  <div key={position} className="select-none text-faint">
+                    ⋯
+                  </div>
+                ) : (
+                  <div
+                    key={position}
+                    className={
+                      row.kind === "add"
+                        ? "text-good"
+                        : row.kind === "remove"
+                          ? "text-danger line-through decoration-danger/40"
+                          : "text-faint"
+                    }
+                  >
+                    <span className="select-none opacity-60">
+                      {row.kind === "add" ? "+ " : row.kind === "remove" ? "− " : "  "}
+                    </span>
+                    {row.text || " "}
+                  </div>
+                ),
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* The draft, verbatim and resolved — and editable in place.
         *

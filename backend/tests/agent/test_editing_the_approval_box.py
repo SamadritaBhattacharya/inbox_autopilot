@@ -240,8 +240,8 @@ async def test_a_recipient_typed_into_the_To_line_is_actually_changed(monkeypatc
     assert vault.is_addressable(token), "the dispatcher would refuse a non-addressable token"
 
     text = message_text(delta)
-    assert "chip" in text.lower(), "typing beside the old chip sends to both"
-    assert "Do NOT Clear" in text
+    assert "Clear the To field" in text, "the old recipient would be left attached"
+    assert "goes to both" in text
 
 
 @pytest.mark.anyio
@@ -301,7 +301,7 @@ async def test_an_untouched_To_line_is_not_a_recipient_change(monkeypatch):
     )
 
     assert "intent" not in delta
-    assert "chip" not in message_text(delta).lower()
+    assert "Clear the To field" not in message_text(delta)
 
 
 # ── an instruction, typed alongside ─────────────────────────────────────────

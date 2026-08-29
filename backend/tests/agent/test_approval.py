@@ -199,6 +199,11 @@ def compose_run(surface: FakeEmailSurface, llm: FakeLLMClient, thread: str):
     return graph, config
 
 
+def scoped(kind: str, brief: str = "") -> LLMResult:
+    """What the edit-scope classifier returns for one human instruction."""
+    return ok(json.dumps({"kind": kind, "brief": brief}))
+
+
 def compose_llm(*, extra: list | None = None) -> FakeLLMClient:
     return FakeLLMClient(
         [
@@ -266,8 +271,11 @@ async def test_an_edit_returns_to_the_loop_without_sending():
     surface = compose_surface()
     llm = compose_llm(
         extra=[
-            # The reviser runs on the edit path, applying the correction to the existing
-            # draft instead of letting the loop regenerate the whole email.
+            # An instruction is classified first: "say 4pm IST" adjusts the words that are
+            # there, rather than asking for a different email or asking a question.
+            scoped("adjust"),
+            # Then the reviser runs, applying the correction to the existing draft instead
+            # of letting the loop regenerate the whole email.
             drafted(subject="Friday demo", body="It moved to 4pm IST."),
             acts("Complete", "Revised and stopping.", success=False, reason="revised"),
         ]

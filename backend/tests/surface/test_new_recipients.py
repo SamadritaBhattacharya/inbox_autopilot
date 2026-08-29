@@ -66,3 +66,50 @@ def test_empty_text_yields_nothing():
 
 def test_trailing_separators_are_ignored():
     assert new_recipients("a@x.com, , b@x.com,", set()) == ["a@x.com", "b@x.com"]
+
+
+# ── whatever the human put between them ─────────────────────────────────────
+#
+# The duplicate guard reads the addresses out of ONE string, so it inherits whatever
+# separator survived the chain above it. Comma-only was the fourth copy of that assumption
+# in this codebase, and it fails the same way as the other three: "a@x.com b@y.com" counted
+# as one unfamiliar address, so the guard could not tell that one of the two was already a
+# chip in the field — and the mail would have gone to that person twice.
+#
+# An address cannot contain a space, so splitting on whitespace here costs nothing.
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "a@x.com, b@x.com",
+        "a@x.com b@x.com",
+        "a@x.com;b@x.com",
+        "a@x.com,b@x.com",
+        "a@x.com  b@x.com",
+        "a@x.com\nb@x.com",
+        " a@x.com , b@x.com ",
+    ],
+)
+def test_two_addresses_are_two_however_they_are_separated(typed):
+    assert new_recipients(typed, set()) == ["a@x.com", "b@x.com"]
+
+
+@pytest.mark.parametrize(
+    "typed",
+    ["a@x.com b@x.com", "a@x.com, b@x.com", "a@x.com;b@x.com"],
+)
+def test_only_the_genuinely_new_one_is_typed(typed):
+    """THE point of this function. Retyping an address already committed as a chip leaves
+    the mail addressed to that person twice."""
+    assert new_recipients(typed, {"a@x.com"}) == ["b@x.com"]
+
+
+def test_three_space_separated_addresses_all_survive():
+    assert new_recipients("a@x.com b@x.com c@x.com", {"b@x.com"}) == ["a@x.com", "c@x.com"]
+
+
+def test_a_space_separated_pair_that_is_entirely_present_adds_nothing():
+    """The guard must still refuse the whole call — "nothing to add" is the correct
+    answer, and typing either one again is not."""
+    assert new_recipients("a@x.com b@x.com", {"a@x.com", "b@x.com"}) == []

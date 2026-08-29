@@ -363,15 +363,22 @@ function latestQuestion(events: AgentEvent[]): PendingQuestion | null {
 function latestApproval(events: AgentEvent[]): PendingApproval | null {
   let pending: PendingApproval | null = null;
   let ask = 0;
+  // The last preview SHOWN, which outlives the card it belonged to — `pending` is cleared
+  // by the decision, and the version we want to compare against is the one just decided on.
+  let shown = "";
   for (const { event, data } of events) {
     if (event === "approval_request") {
       ask += 1;
+      const preview = str(data.preview);
+      const previousPreview = shown;
+      shown = preview;
       pending = {
         requestId: str(data.requestId),
         ask,
+        previousPreview,
         kind: str(data.kind, "bulk"),
         summary: str(data.summary),
-        preview: str(data.preview),
+        preview,
         expiresAt: str(data.expiresAt),
       };
     } else if (event === "approval_result" || event === "run_complete") {

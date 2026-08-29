@@ -242,14 +242,25 @@ class ActionValidator:
 
 
 def _is_all_tokens(value: str) -> bool:
-    """Is every comma-separated part of `value` a vault token, and nothing else?"""
+    """Is every part of `value` a vault token, and nothing else?"""
     parts = _split_tokens(value)
     return bool(parts) and all(TOKEN_RE.fullmatch(part) for part in parts)
 
 
 def _split_tokens(value: str) -> list[str]:
-    """Recipient fields may carry several tokens: `"P3, P7"`."""
-    return [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+    """Recipient fields may carry several tokens: `"P3, P7"` — or `"P3 P7"`.
+
+    **Whitespace counts as a separator, and leaving it out cost a real send.** A human added
+    a second address in the approval box by typing a SPACE between them; the minting
+    preserved their separator, so the gate asked for `P3 P7`, and this splitter — commas
+    only — saw one part that was not a token. `_is_all_tokens` said no, the value was never
+    resolved, and the literal characters "P3 P7" went into Gmail's To field.
+
+    Splitting on whitespace as well is unambiguous: a value made only of tokens and
+    separators means the same thing however it is punctuated, and nothing else in the
+    system produces a token with a space inside it.
+    """
+    return [part for part in re.split(r"[,;\s]+", value.strip()) if part]
 
 
 def approval_fingerprint(call: ActionCall, preview: str = "") -> str:

@@ -55,6 +55,14 @@ export type PendingApproval = {
   summary: string;
   /** The RESOLVED draft. Cockpit-only — never re-enters the model's context. */
   preview: string;
+  /**
+   * The preview of the PREVIOUS ask in this run, when there was one.
+   *
+   * Kept so the card can show what changed rather than a second wall of text. After an
+   * edit the gate re-proposes the whole email, and finding your own correction in it meant
+   * re-reading all of it.
+   */
+  previousPreview: string;
   expiresAt: string;
 };
 

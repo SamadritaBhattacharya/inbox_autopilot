@@ -142,3 +142,77 @@ def test_the_instruction_never_tells_the_worker_to_diff_anything():
 
     assert "fields that changed" not in text
     assert "which changed" not in text.lower()
+
+
+# ── the text to type travels WITH the instruction ───────────────────────────
+#
+# **The second live failure, after the first was fixed.** The human added a line in the
+# approval box and applied it. The worker cleared the body and retyped it — identically.
+# Every mechanical part had worked: the edit parsed, the diff was right, the field was
+# named, it was cleared and rewritten. It rewrote the OLD text.
+#
+# "Type the new body exactly as it appears above" was the whole problem. TWO versions of
+# the email were above: the corrected draft rendered at the top of the prompt, and the
+# worker's own earlier `Type(text=…)` call carrying the old body, sitting in the history
+# immediately before the instruction. It copied the nearer one.
+#
+# A pointer into a conversation is not a reference when the conversation holds an older
+# copy of the same thing.
+
+
+def test_the_new_body_is_carried_IN_the_instruction():
+    after = Draft(subject=BEFORE.subject, body="Good evening.\n\nKeep going.\n\nBest, Sam")
+    text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, after)
+
+    assert "Good evening.\n\nKeep going.\n\nBest, Sam" in text
+
+
+def test_it_never_points_at_something_ELSEWHERE_in_the_conversation():
+    after = Draft(subject=BEFORE.subject, body="New body.")
+    text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, after)
+
+    assert "as it appears above" not in text
+    assert "above" not in text
+
+
+def test_it_says_the_earlier_version_is_dead():
+    """The stale `Type` call is still sitting in the history, nearer than the new draft.
+    Naming it as superseded costs a sentence; hoping is what produced the bug."""
+    after = Draft(subject=BEFORE.subject, body="New body.")
+    text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, after)
+
+    assert "superseded" in text
+    assert "earlier Type call" in text
+
+
+def test_the_markers_are_named_as_not_part_of_the_text():
+    """Otherwise "--- begin body ---" gets typed into the email."""
+    after = Draft(subject=BEFORE.subject, body="New body.")
+    text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, after)
+
+    assert "--- begin body ---" in text
+    assert "--- end body ---" in text
+    assert "not the markers themselves" in text
+
+
+def test_a_changed_subject_carries_its_own_text():
+    after = Draft(subject="Friday demo — moved", body=BEFORE.body)
+    text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, after)
+
+    assert "--- begin subject ---\nFriday demo — moved\n--- end subject ---" in text
+    assert "--- begin body ---" not in text, "an unchanged body must not be retyped"
+
+
+def test_a_multi_line_body_survives_intact():
+    """A blank line between paragraphs is content. Losing one silently reformats the email."""
+    body = "Hi,\n\nFirst paragraph.\n\nSecond paragraph.\n\nBest,\nSam"
+    text = _apply_revision(_state(bodyIndex=70), BEFORE, Draft(subject=BEFORE.subject, body=body))
+
+    assert f"--- begin body ---\n{body}\n--- end body ---" in text
+
+
+def test_an_unchanged_draft_carries_no_text_at_all():
+    text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, BEFORE)
+
+    assert "--- begin" not in text
+    assert "superseded" not in text

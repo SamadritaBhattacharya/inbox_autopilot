@@ -62,12 +62,29 @@ REQUIRED_SLOTS: dict[Action, list[list[str]]] = {
 #: vault's job, at dispatch, on tokens the model actually sends.
 _RECIPIENT_SPLIT_RE = re.compile(r"\s*(?:,|;|&|\band\b)\s*", re.IGNORECASE)
 
+#: Is this value nothing but vault tokens and separators? Only then may whitespace split it.
+_TOKENS_ONLY_RE = re.compile(r"(?:[PHCT]\d+)(?:[\s,;&]+(?:[PHCT]\d+))*")
+
 
 def split_recipients(value: str) -> list[str]:
-    """`value` broken into its candidate people, in order, de-duplicated."""
+    """`value` broken into its candidate people, in order, de-duplicated.
+
+    **Whitespace separates TOKENS, and only tokens.** `"P1 P2"` used to come back as one
+    person whose name happened to be two tokens, and the consequences were quiet and bad:
+    `_delivery_instruction` saw `len(people) == 1`, so two recipients got no
+    together-or-separately instruction at all — and had the human asked for separate
+    emails, the enumerated plan would have read "1. P1 P2", one email to both.
+
+    A name legitimately contains spaces ("Priya Nair"), so this cannot split on whitespace
+    in general. A vault token cannot, so when the whole value is tokens the split is exact
+    and safe.
+    """
+    raw = _TOKENS_ONLY_RE.fullmatch(value.strip())
+    pieces = TOKEN_RE.findall(value) if raw else _RECIPIENT_SPLIT_RE.split(value)
+
     seen: set[str] = set()
     parts: list[str] = []
-    for part in _RECIPIENT_SPLIT_RE.split(value):
+    for part in pieces:
         part = part.strip()
         if part and part not in seen:
             seen.add(part)

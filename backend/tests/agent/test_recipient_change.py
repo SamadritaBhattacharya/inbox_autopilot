@@ -74,18 +74,44 @@ def test_the_instruction_names_the_new_recipient_and_the_field():
     assert "[50]" in text
 
 
-def test_it_says_to_remove_the_existing_chip():
-    """A committed recipient is a chip — a separate node. Typing beside it ADDS a second
-    recipient, so the mail would go to both."""
+def test_it_says_to_CLEAR_the_field_first():
+    """**This assertion is the reverse of what it used to be, and deliberately so.**
+
+    It used to require "Do NOT Clear the To field", because Clear was `Ctrl+A, Delete` in
+    the input — which empties the loose text and leaves the committed chip attached, so the
+    next address is added alongside and the mail goes to both. The instruction worked around
+    a missing capability by sending the agent to click the × on the chip instead.
+
+    That × is not in the observation: a chip has no accessible name and does not survive
+    the funnel. Told to click something invisible, the agent scrolled six times, ran Extract
+    twice, and asked the human for an index number. `_clear_recipients` now removes the
+    chips itself, so the instruction can name a verb that exists.
+    """
     text = _replace_recipient(_state(), "P5")
-    assert "chip" in text.lower()
+
+    assert "Clear the To field" in text
+    assert "Do NOT Clear" not in text, "the workaround outlived the thing it worked around"
 
 
-def test_it_forbids_clearing_the_to_field():
-    """Clear empties the input beside the chip and leaves the old recipient attached —
-    which is exactly how one changed recipient becomes two."""
+def test_it_never_sends_the_agent_hunting_for_a_chip():
+    """The × is not in the element list, and no amount of looking will put it there.
+
+    Naming chips as something Clear takes care of is fine — that is reassurance. Naming
+    them as something to FIND and CLICK is the bug: it points at an element that did not
+    survive the funnel, and the only moves left after that are scrolling and asking.
+    """
     text = _replace_recipient(_state(), "P5")
-    assert "Do NOT Clear" in text
+
+    assert "×" not in text
+    assert "on its chip" not in text
+    assert "in the list below" not in text
+
+
+def test_it_still_forbids_typing_on_top_of_the_old_recipient():
+    """The hazard the old wording protected against is real and must survive the fix."""
+    text = _replace_recipient(_state(), "P5")
+
+    assert "goes to both" in text
 
 
 def test_the_subject_and_body_are_left_alone():

@@ -112,3 +112,124 @@ async def test_case_is_ignored(page):
     not read as a different person."""
     found = await _present(page, DIALOG.format(chips=chip("Priya@Corp.com"), typed=""))
     assert "priya@corp.com" in found
+
+
+# ── a token must arrive as an ADDRESS, in a real browser ────────────────────
+#
+# Everything above is about not typing the same person twice. This is about typing the
+# right thing at all: the model sends `P1`, and what has to land in Gmail's To field is
+# priya@corp.com — never the characters "P1".
+#
+# It went wrong when a human separated two recipients with a space. The value stayed
+# `"P1 P3"` all the way down, the dispatcher's token check understood commas only, so
+# nothing was resolved and the literal text was typed. Asserted here through the real
+# `_do_type`, against a real browser, because that is the only place the whole chain is
+# actually joined up.
+
+
+def _surface(page, vault):
+    from inbox_contracts import Element, MailContext, Observation, Viewport
+
+    from app.surface.playwright_surface import PlaywrightEmailSurface
+
+    instance = PlaywrightEmailSurface.__new__(PlaywrightEmailSurface)
+    instance._page = page
+    instance._vault = vault
+    instance._last_observation = Observation(
+        context_id="T",
+        title="Compose",
+        viewport=Viewport(width=1280, height=800),
+        elements=[Element(index=50, role="textbox", name="To")],
+        mail=MailContext(view="compose", composeOpen=True, toIndex=50),
+    )
+    return instance
+
+
+async def _type_into_to(page, vault, **args) -> tuple[object, str]:
+    """Run the real Type handler and read back what the To input actually holds."""
+    from inbox_contracts import ActionCall
+
+    from app.surface.dispatch import ActionValidator
+
+    surface = _surface(page, vault)
+    validator = ActionValidator(
+        vault=vault,
+        geometry={50: (10.0, 20.0)},
+        bound_verbs={"Type"},
+        observation=surface._last_observation,
+    )
+    action = validator.validate(ActionCall(name="Type", args={"index": 50, **args}))
+    result = await surface._do_type(action)
+    typed = await page.eval_on_selector('input[name="to"]', "el => el.value")
+    return result, typed
+
+
+@pytest.fixture
+def vault():
+    from app.security.vault import SessionPiiVault
+
+    store = SessionPiiVault()
+    store.trust("priya@corp.com")
+    store.trust("alex@corp.com")
+    return store
+
+
+@pytest.mark.parametrize("text", ["P1", "P1, P2", "P1 P2", "P1;P2"])
+async def test_a_token_is_typed_as_the_real_address(page, vault, text):
+    """THE regression, end to end. Whatever separated them, addresses land — not tokens."""
+    await page.set_content(f"<body>{DIALOG.format(chips='', typed='')}</body>")
+
+    result, landed = await _type_into_to(page, vault, text=text)
+
+    assert result.success is True
+    assert "P1" not in landed and "P2" not in landed, f"a token was typed literally: {landed}"
+    assert "priya@corp.com" in landed
+
+
+async def test_two_tokens_land_comma_separated_so_gmail_chips_each_one(page, vault):
+    """A comma is what commits a chip. Two addresses joined by a space are one unbroken
+    string to Gmail, and the single trailing Enter makes them one malformed recipient."""
+    await page.set_content(f"<body>{DIALOG.format(chips='', typed='')}</body>")
+
+    _, landed = await _type_into_to(page, vault, text="P1 P2")
+
+    assert landed == "priya@corp.com, alex@corp.com"
+
+
+async def test_the_recipient_argument_lands_the_same_way(page, vault):
+    await page.set_content(f"<body>{DIALOG.format(chips='', typed='')}</body>")
+
+    _, landed = await _type_into_to(page, vault, recipient="P1 P2")
+
+    assert landed == "priya@corp.com, alex@corp.com"
+
+
+async def test_only_the_new_one_is_typed_when_the_other_is_already_a_chip(page, vault):
+    """The duplicate guard and the separator fix have to hold at the same time."""
+    await page.set_content(
+        f"<body>{DIALOG.format(chips=chip('priya@corp.com'), typed='')}</body>"
+    )
+
+    result, landed = await _type_into_to(page, vault, text="P1 P2")
+
+    assert result.success is True
+    assert landed == "alex@corp.com", "the address already committed was typed again"
+
+
+async def test_an_unresolvable_token_is_refused_and_nothing_is_typed(page, vault):
+    """The last line of defence: if resolution somehow did not happen, the field is left
+    untouched rather than filled with literal text."""
+    from inbox_contracts import ActionCall
+
+    from app.surface.dispatch import ResolvedAction
+
+    await page.set_content(f"<body>{DIALOG.format(chips='', typed='')}</body>")
+    surface = _surface(page, vault)
+
+    result = await surface._do_type(
+        ResolvedAction(call=ActionCall(name="Type", args={"index": 50, "text": "P1 P2"}))
+    )
+    landed = await page.eval_on_selector('input[name="to"]', "el => el.value")
+
+    assert result.error_code == "UNRESOLVED_TOKEN"
+    assert landed == "", "literal token text reached the To field"

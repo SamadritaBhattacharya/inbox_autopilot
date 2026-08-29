@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from itertools import count
@@ -32,6 +33,7 @@ from inbox_contracts import ActionCall, ActionResult, Observation
 
 from app.observation.funnel.pipeline import ObservationFunnel
 from app.observation.funnel.reading_order import identity_set
+from app.security.patterns import TOKEN_RE
 from app.security.tokenizer import PiiTokenizer
 from app.security.vault import SessionPiiVault
 from app.surface.base import SurfaceUnavailable
@@ -646,6 +648,28 @@ class PlaywrightEmailSurface:
         recipient_field = _is_recipient_arg(action)
         field = self._compose_field_for(action.call.args.get("index"))
 
+        if field == "to" and TOKEN_RE.search(text):
+            # ── a token reached the To field as literal characters ──
+            #
+            # `text` is post-resolution, so a `P17` still in it means the dispatcher did NOT
+            # recognise this value as tokens and passed it through verbatim. Typing it puts
+            # the characters "P1 P3" into Gmail as if they were an address — which is what
+            # happened when a human separated two recipients with a space.
+            #
+            # A literal ADDRESS in this field is already refused (`UNKNOWN_TOKEN`); a
+            # literal token is the same class of mistake and gets the same answer. Refusing
+            # is what makes it visible: typed, in the trajectory, and fixable next turn,
+            # rather than a garbage recipient shown to a human as a real draft.
+            return ActionResult(
+                success=False,
+                reason=(
+                    "that is a vault token, not an address — it would be typed into Gmail "
+                    "as literal text. Pass recipients as the `recipient` argument, or as "
+                    "comma-separated tokens (P1, P3), so they can be resolved."
+                ),
+                error_code="UNRESOLVED_TOKEN",
+            )
+
         if recipient_field:
             # ── the duplicate-recipient guard ──
             #
@@ -665,18 +689,26 @@ class PlaywrightEmailSurface:
             # DROPPED and only genuinely new ones are typed. Adding a recipient later works;
             # adding the same one twice becomes impossible.
             present = await self._already_addressed()
-            if present:
-                fresh = new_recipients(text, present)
-                if not fresh:
-                    token = action.call.args.get("recipient") or action.call.args.get("text")
-                    return ActionResult(
-                        success=False,
-                        reason=(
-                            f"{token} is already in the To field — nothing to add. The "
-                            "recipient is done; move on to the subject or the body."
-                        ),
-                        error_code="RECIPIENT_ALREADY_PRESENT",
-                    )
+            fresh = new_recipients(text, present)
+            if present and not fresh:
+                token = action.call.args.get("recipient") or action.call.args.get("text")
+                return ActionResult(
+                    success=False,
+                    reason=(
+                        f"{token} is already in the To field — nothing to add. The "
+                        "recipient is done; move on to the subject or the body."
+                    ),
+                    error_code="RECIPIENT_ALREADY_PRESENT",
+                )
+            # Re-joined with COMMAS, always — not only when something was already there.
+            #
+            # Resolution substitutes token for address in place, so it inherits whatever
+            # separated them: `"P1 P2"` becomes `"priya@corp.com alex@corp.com"`. Gmail's To
+            # field commits a chip on a comma; two addresses separated by a space are one
+            # unbroken string to it, and a single trailing Enter turns them into one
+            # malformed recipient. This used to run only inside the duplicate guard, so an
+            # EMPTY To field — the common case — skipped the normalization entirely.
+            if fresh:
                 text = ", ".join(fresh)
 
         # A known compose field is reached by selector; anything else still goes by the
@@ -770,6 +802,28 @@ class PlaywrightEmailSurface:
         one, and reporting a good write as a failure sends the agent retyping over text that
         is already correct — the exact duplication this file works to prevent.
         """
+        if field == "to":
+            # ── a committed recipient is a CHIP, not text in the input ──
+            #
+            # **This is why the agent typed an address, watched it vanish, and typed it
+            # again.** Typing a recipient ends with Enter (see `_do_type`), which is what
+            # commits the address — and committing it moves the address OUT of the input
+            # into a chip node and leaves `input.value` empty. Read through the To
+            # selectors, a write that had just succeeded looked like an empty field, so
+            # this returned False and the action reported `TYPE_DID_NOT_LAND`. Told its own
+            # correct action had failed, the agent retyped.
+            #
+            # The knowledge to answer properly was already in this file: `_RECIPIENTS_JS`
+            # reads chips. So the same address was "already present" to the duplicate guard
+            # and "never landed" to this check, in the same turn — two halves of one file
+            # disagreeing about one fact. They share the chip-aware read now.
+            #
+            # Never a confident False: that query returns an empty set both for "no
+            # recipient" and for "no dialog to read", and this file's standing rule is that
+            # only a confident False is a failure. A recipient that genuinely did not land
+            # is caught by the next observation, where `toFilled` says so.
+            return True if await self._already_addressed() else None
+
         seen = False
         for selector in _FIELD_SELECTORS[field]:
             try:
@@ -1061,7 +1115,19 @@ class PlaywrightEmailSurface:
         await self._page.mouse.click(found["x"], found["y"])
         return True
 
+    #: How many chips one Clear will remove before giving up.
+    #:
+    #: A bound, not a guess at how many recipients exist: without one, a Backspace that stops
+    #: deleting (focus lost, a field that is not a recipient list) becomes an infinite loop
+    #: inside a single action, and the timeout wall is the only thing that would end it.
+    MAX_CHIPS = 25
+
     async def _do_clear(self, action: ResolvedAction) -> ActionResult:
+        field = self._compose_field_for(action.call.args.get("index"))
+
+        if field == "to":
+            return await self._clear_recipients()
+
         if action.point is not None:
             x, y = action.point
             await self._page.mouse.click(x, y)
@@ -1069,18 +1135,127 @@ class PlaywrightEmailSurface:
         await self._page.keyboard.press("Delete")
         return ActionResult(success=True, reason="cleared the field")
 
+    async def _clear_recipients(self) -> ActionResult:
+        """Empty the To field — committed chips included.
+
+        **This is the primitive whose absence sent the agent hunting for a "×" that is not
+        in the observation.** A committed recipient is a chip, a separate node with no
+        accessible name, so it never survives the funnel. Told to click it, the agent
+        scrolled six times, ran Extract twice, and finally asked the human for an index
+        number — a value that is internal, rebuilt every turn, and that no person has ever
+        seen. It had no legal move, because we had asked for one that does not exist.
+
+        `Ctrl+A, Delete` is why the old instruction FORBADE clearing this field: it empties
+        the loose text beside the chip and leaves the recipient attached, so the next typed
+        address is added alongside rather than instead. That is a missing capability, not a
+        law of nature — Gmail deletes the last chip on Backspace against an empty input,
+        which is exactly what a person does, and it is a trusted keystroke.
+
+        So the executor does the whole job in one verb, and the model gets back the
+        instruction it can actually follow: clear, then type.
+        """
+        if not await self._focus_field("to"):
+            return ActionResult(
+                success=False,
+                reason="could not reach the To field — nothing was cleared.",
+                error_code="FIELD_UNREACHABLE",
+            )
+
+        # Any half-typed text first, so the Backspaces below land on chips rather than on
+        # the characters sitting beside them.
+        await self._page.keyboard.press("Control+A")
+        await self._page.keyboard.press("Delete")
+
+        removed = 0
+        for _ in range(self.MAX_CHIPS):
+            if not await self._already_addressed():
+                break
+            await self._page.keyboard.press("Backspace")
+            removed += 1
+
+        # Read the truth back rather than trusting the keystrokes. A recipient believed
+        # removed and still attached is how one mail goes to two people.
+        if remaining := await self._already_addressed():
+            return ActionResult(
+                success=False,
+                reason=(
+                    f"the To field still holds {len(remaining)} recipient(s) after "
+                    "clearing. Do not type another address on top — re-observe first."
+                ),
+                error_code="RECIPIENTS_NOT_CLEARED",
+            )
+        return ActionResult(
+            success=True,
+            reason=f"cleared the To field ({removed} recipient(s) removed)",
+            undo={"verb": "Clear", "field": "to", "removed": removed},
+        )
+
     async def _do_presskey(self, action: ResolvedAction) -> ActionResult:
         key = str(action.call.args.get("key") or "Enter")
         await self._page.keyboard.press(key)
         return ActionResult(success=True, reason=f"pressed {key}")
 
     async def _do_scroll(self, action: ResolvedAction) -> ActionResult:
+        """Scroll, and say honestly whether anything moved.
+
+        **An unconditional success here is what let one run burn twenty turns.** Inside an
+        open compose dialog the wheel does nothing — the dialog does not scroll — and this
+        reported "scrolled down" every time. The agent was looking for an element that was
+        never in the observation, was told six times that it had successfully scrolled
+        towards it, and had no reason to stop. Scroll is excluded from the repetition guard
+        by design (it is a legitimate thing to repeat), so nothing else was going to catch
+        it either.
+
+        A scroll that does not move the page is a FAILURE, and a typed one: it is the only
+        evidence available that "look further down" is not the answer.
+        """
         direction = str(action.call.args.get("direction") or "down")
         amount = float(action.call.args.get("amount") or 1)
         height = self._page.viewport_size["height"] if self._page.viewport_size else 800
         delta = height * amount * (1 if direction == "down" else -1)
+
+        before = await self._scroll_signature()
         await self._page.mouse.wheel(0, delta)
+        # Scrolling is animated; reading the position back immediately reads the old one.
+        await asyncio.sleep(SETTLE_MIN)
+        after = await self._scroll_signature()
+
+        if before is not None and after is not None and before == after:
+            return ActionResult(
+                success=False,
+                reason=(
+                    f"nothing moved — the page is already at the {direction} limit, or "
+                    "what you are looking at (an open dialog) does not scroll. Scrolling "
+                    "again will not help. If an element is not in the list, it did not "
+                    "survive the observation and is not further down."
+                ),
+                error_code="SCROLL_NO_EFFECT",
+            )
         return ActionResult(success=True, reason=f"scrolled {direction}")
+
+    async def _scroll_signature(self) -> str | None:
+        """Where everything on the page is scrolled to, as one comparable value.
+
+        `window.scrollY` alone is not enough: Gmail scrolls inner containers, so the window
+        never moves and a real scroll would look like a no-op. Summing every scrolled
+        element covers both, and a sum is enough because the question is only "did anything
+        change", never "what changed".
+
+        `None` when the page cannot be read — an unreadable page is not a page that failed
+        to scroll, and this must never invent a failure.
+        """
+        try:
+            return await self._page.evaluate(
+                "() => {"
+                "  let total = 0;"
+                "  for (const el of document.querySelectorAll('*')) {"
+                "    total += el.scrollTop + el.scrollLeft;"
+                "  }"
+                "  return `${window.scrollY}|${window.scrollX}|${total}`;"
+                "}"
+            )
+        except Exception:
+            return None
 
     async def _do_waitfor(self, action: ResolvedAction) -> ActionResult:
         seconds = min(float(action.call.args.get("seconds") or 1.0), TIMEOUTS["WaitFor"])
@@ -1345,8 +1520,14 @@ def new_recipients(text: str, present: set[str]) -> list[str]:
 
     Case-insensitive, because Gmail echoes an address back in whatever case it was typed
     and a capital letter is not a different person.
+
+    Whitespace separates as surely as a comma does — an address cannot contain a space, so
+    there is nothing to lose by splitting on both. Comma-only was the fourth copy of one
+    assumption, and it fails the same way as the others: `"a@x.com b@y.com"` counted as a
+    single unfamiliar address, so the duplicate guard could not see that one of the two was
+    already in the field.
     """
-    wanted = [part.strip() for part in text.split(",") if part.strip()]
+    wanted = [part for part in re.split(r"[,;\s]+", text.strip()) if part]
     return [address for address in wanted if address.lower() not in present]
 
 
