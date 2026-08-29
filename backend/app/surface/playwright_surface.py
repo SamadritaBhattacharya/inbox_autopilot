@@ -132,6 +132,82 @@ _COMPOSE_FIELDS_JS = """
 """
 
 
+#: Where to click to close an open compose window, or `null` if none is open.
+#:
+#: **Save & close, never Discard.** A leftover draft is somebody's words; it goes to Drafts
+#: where they can find it. Discarding is irreversible, and nothing irreversible happens
+#: outside the approval gate — least of all as a side effect of starting an unrelated task.
+#:
+#: Scoped to a dialog that actually contains compose fields. Gmail uses `role="dialog"` for
+#: settings panes and confirmations too, and closing one of those because it looked like a
+#: draft would be a mystery to debug.
+_CLOSE_COMPOSE_JS = """
+() => {
+  for (const dialog of document.querySelectorAll('[role="dialog"]')) {
+    const composing = dialog.querySelector(
+      '[name="to"], textarea[name="to"], [name="subjectbox"], [g_editable="true"]'
+    );
+    if (!composing) continue;
+
+    const labels = ['save & close', 'save and close', 'close'];
+    for (const el of dialog.querySelectorAll('[aria-label], [data-tooltip], [title]')) {
+      const name = (
+        el.getAttribute('aria-label') || el.getAttribute('data-tooltip') ||
+        el.getAttribute('title') || ''
+      ).trim().toLowerCase();
+      if (!labels.includes(name)) continue;
+      const box = el.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) continue;
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }
+    // A compose window with no reachable close control: report the dialog itself so the
+    // caller still knows one is open and can fall back to Escape.
+    const box = dialog.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + 1 };
+  }
+  return null;
+}
+"""
+
+
+def _state_changes(before: Observation | None, after: Observation) -> str:
+    """One line naming what MOVED between two observations.
+
+    Deliberately about state transitions, not element churn. An element count that fell from
+    170 to 77 tells the agent nothing it can act on; "the compose window closed" tells it its
+    last action worked. These are the facts a snapshot cannot express, because each one is a
+    statement about two snapshots.
+    """
+    if before is None:
+        return ""
+
+    was, now = before.mail, after.mail
+    if was is None or now is None:
+        return ""
+
+    changes: list[str] = []
+    if was.compose_open and not now.compose_open:
+        changes.append("the compose window closed")
+    elif not was.compose_open and now.compose_open:
+        changes.append("a compose window opened")
+
+    if was.view != now.view:
+        changes.append(f"the view changed from {was.view} to {now.view}")
+
+    # Only for a window that stayed open: a field "emptying" because the whole window went
+    # away is the window closing, already said above and much more usefully.
+    if was.compose_open and now.compose_open:
+        for label, before_filled, now_filled in (
+            ("To", was.to_filled, now.to_filled),
+            ("Subject", was.subject_filled, now.subject_filled),
+            ("Body", was.body_filled, now.body_filled),
+        ):
+            if before_filled != now_filled:
+                changes.append(f"{label} is now {'filled' if now_filled else 'empty'}")
+
+    return "; ".join(changes)
+
+
 #: Finds a navigation entry in the sidebar by its visible name.
 #:
 #: Restricted to things that navigate — links and elements with a navigational role.
@@ -447,6 +523,22 @@ class PlaywrightEmailSurface:
             elements, meta, previous_identities=self._previous_identities
         )
 
+        # Say what MOVED, not just what is there.
+        #
+        # **Absence is invisible in a snapshot, and that is the whole gap this closes.** The
+        # funnel rebuilds from scratch every turn on purpose, so a dialog that opens is
+        # salient — it is simply in the new list. A dialog that CLOSES is nothing at all: the
+        # agent has to notice something missing, which is far harder than noticing something
+        # present. Told to "close the compose box", it clicked Save & close, the window shut,
+        # and it spent every remaining turn hunting for a window that was already gone —
+        # because the only evidence of its success was an absence.
+        #
+        # `Observation.changed` has been in the contract from the start and nothing ever
+        # populated it. This is what it is for.
+        changes = _state_changes(self._last_observation, observation)
+        if changes:
+            observation = observation.model_copy(update={"changed": changes})
+
         # Indices belong to THIS observation only. Replacing the map wholesale is what makes
         # a stale index from last turn a rejection rather than a misfire.
         self._geometry = geometry
@@ -458,6 +550,73 @@ class PlaywrightEmailSurface:
 
         logger.debug("observed %d/%d elements", report.shown, report.extracted)
         return observation
+
+    async def reset(self) -> str:
+        """Close anything a previous run walked away from, and return to the mailbox.
+
+        See `EmailSurface.reset`. Save & close rather than discard: a leftover draft is
+        somebody's words, and it stays in Drafts where they can find it.
+        """
+        readable, point = await self._compose_close_point()
+        if not readable or point is None:
+            self._forget_page()
+            return ""
+
+        # Two ways out, tried in order, each VERIFIED before it is believed.
+        #
+        # Reporting an unverified close would be the same bug as `Scroll` reporting success
+        # when nothing moved: the human is told the page was made clean, the agent starts
+        # anyway, and the stale window is still there steering it into somebody's draft.
+        # Escape is second because Gmail minimizes rather than closes on some builds, which
+        # looks like success from every angle except the one that matters.
+        async def click_save_and_close() -> None:
+            await self._page.mouse.move(point["x"], point["y"])
+            await self._page.mouse.click(point["x"], point["y"])
+
+        async def press_escape() -> None:
+            await self._page.keyboard.press("Escape")
+
+        for attempt in (click_save_and_close, press_escape):
+            with contextlib.suppress(Exception):
+                await attempt()
+            await asyncio.sleep(SETTLE_MIN)
+            readable, still_open = await self._compose_close_point()
+            if readable and still_open is None:
+                self._forget_page()
+                logger.info("surface reset: closed a leftover compose window")
+                return "closed a compose window left open by an earlier run (saved to Drafts)"
+
+        self._forget_page()
+        logger.warning("surface reset: a leftover compose window would not close")
+        return (
+            "could not close the compose window an earlier run left open — it may still be "
+            "on screen"
+        )
+
+    async def _compose_close_point(self) -> tuple[bool, dict | None]:
+        """`(could the page be read?, where to click to close a compose window)`.
+
+        The two are separated because conflating them is how "I could not look" becomes "I
+        looked and there was nothing" — which, on the verification side, is how an unclosed
+        window gets reported as closed.
+        """
+        try:
+            return True, await self._page.evaluate(_CLOSE_COMPOSE_JS)
+        except Exception:  # page closed, crashed, or navigating
+            return False, None
+
+    def _forget_page(self) -> None:
+        """Drop every referent that belonged to the page we just changed.
+
+        Indices, identities and approval fingerprints are all statements about one
+        observation of one page. A new run inheriting them could act on a number that now
+        means something else — or, worse, dispatch a send against consent given for a draft
+        that no longer exists.
+        """
+        self._geometry = {}
+        self._last_observation = None
+        self._previous_identities = set()
+        self._approved = set()
 
     async def act(self, call: ActionCall) -> ActionResult:
         # Re-read the live draft before validating anything irreversible. The human approved

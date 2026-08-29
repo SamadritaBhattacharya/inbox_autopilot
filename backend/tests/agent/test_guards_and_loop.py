@@ -414,9 +414,21 @@ def test_an_identical_extract_counts_toward_repetition():
     assert repetition_count([signature] * 3, signature) == 3
 
 
-def test_two_different_extract_questions_are_not_repetition():
-    """The counterfactual. Genuine exploration must stay free — the signature hashes the
-    arguments, so different questions never count against each other."""
+def test_two_different_extract_questions_ARE_repetition():
+    """**This assertion is the reverse of what it used to be.**
+
+    It used to require that different Extract questions never count against each other —
+    "genuine exploration must stay free". That reasoning holds for every verb whose answer
+    depends on its arguments, and Extract is not one of them: it returns a fixed sentence
+    ("the element list above is everything visible; field contents are never included")
+    whatever it is asked.
+
+    Observed live. Told to close a compose window that had already closed, the agent asked
+    `Extract("what elements correspond to the open compose box…")`, got the canned answer,
+    rephrased to `Extract("identify any elements related to the open compose box…")`, and
+    got the same answer again. Two LLM calls on a rate-limited free tier, no new
+    information, and the guard saw two unrelated actions. Nothing would have stopped ten.
+    """
     from inbox_contracts import ActionCall
 
     from app.agent.guards import action_signature
@@ -424,7 +436,23 @@ def test_two_different_extract_questions_are_not_repetition():
     first = action_signature(ActionCall(name="Extract", args={"query": "who sent this?"}))
     second = action_signature(ActionCall(name="Extract", args={"query": "what is the date?"}))
 
-    assert first != second
+    assert first == second
+
+
+def test_the_reversal_is_scoped_to_verbs_whose_answer_ignores_their_arguments():
+    """Every other verb keeps argument-sensitive signatures. Archiving thread 3 and thread 9
+    is the job; collapsing those would kill every triage run."""
+    from inbox_contracts import ActionCall
+
+    from app.agent.guards import action_signature
+
+    archive_3 = action_signature(ActionCall(name="Archive", args={"index": 3}))
+    archive_9 = action_signature(ActionCall(name="Archive", args={"index": 9}))
+    click_a = action_signature(ActionCall(name="Click", args={"index": 3}))
+    click_b = action_signature(ActionCall(name="Click", args={"index": 9}))
+
+    assert archive_3 != archive_9
+    assert click_a != click_b
 
 
 def test_scrolling_the_same_way_twice_is_still_progress():

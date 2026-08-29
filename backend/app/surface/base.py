@@ -57,6 +57,25 @@ class EmailSurface(Protocol):
         """
         ...
 
+    async def reset(self) -> str:
+        """Put the mailbox back to a known starting state. Returns what it had to undo.
+
+        **The browser outlives the run; the graph's state does not.** A `thread_id` gets a
+        fresh `AgentState` every time, but the page is whatever the previous run walked away
+        from — and a run that stopped, or whose approval timed out, walks away with a
+        compose window open. The next task then starts inside a stranger's half-written
+        email, and `COMPOSE_ALREADY_OPEN` — correct within a run — actively steers it into
+        writing there.
+
+        Called once per run, before any worker sees the page, so "where does a task start?"
+        has the same answer every time.
+
+        **Never destructive.** A leftover draft is saved and closed, not discarded: those
+        are somebody's words, and nothing irreversible happens outside the approval gate.
+        Returns "" when there was nothing to undo.
+        """
+        ...
+
     async def preview(self, call: ActionCall) -> str:
         """A human-readable, RESOLVED description of what `call` is about to do.
 

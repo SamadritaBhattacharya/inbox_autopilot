@@ -29,6 +29,8 @@ bench/results/
 playwright-report/
 test-results/
 
+#interview_prep.md
+
 # ── OS / IDE ──
 .DS_Store
 Thumbs.db

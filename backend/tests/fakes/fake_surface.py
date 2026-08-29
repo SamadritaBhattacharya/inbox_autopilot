@@ -51,11 +51,13 @@ class FakeEmailSurface:
         *,
         unavailable: bool = False,
         preview: str = "",
+        reset_report: str = "",
     ) -> None:
         self._observations = list(observations or [])
         self._results = list(results or [])
         self._unavailable = unavailable
         self._preview = preview
+        self._reset_report = reset_report
 
         #: Every action attempted, in order. The assertion surface for guardrail tests.
         self.calls: list[ActionCall] = []
@@ -66,6 +68,8 @@ class FakeEmailSurface:
         #: approval test pass while proving nothing.
         self.approved: set[str] = set()
         self.observe_count = 0
+        #: How many times a run asked for a clean starting page. Exactly once per run.
+        self.resets = 0
 
     # ── the port ────────────────────────────────────────────────────────────
 
@@ -101,6 +105,16 @@ class FakeEmailSurface:
         if self._results:
             return self._results.pop(0)
         return ActionResult(success=True, reason=f"{call.name} ok")
+
+    async def reset(self) -> str:
+        """Record that a run asked for a clean page, and say what it cleared.
+
+        Scripted rather than always-empty: "a leftover compose window was closed" is a thing
+        the cockpit reports and the worker is told about, so a test needs to be able to make
+        it happen.
+        """
+        self.resets += 1
+        return self._reset_report
 
     def approve(self, fingerprint: str) -> None:
         """Record an authorization, and remember it was granted.

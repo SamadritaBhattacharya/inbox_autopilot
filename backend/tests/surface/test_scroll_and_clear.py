@@ -237,3 +237,170 @@ async def test_an_unreachable_To_field_is_typed_rather_than_silent(page):
 
     assert result.success is False
     assert result.error_code == "FIELD_UNREACHABLE"
+
+
+# ── reset: a new run starts from a known page ───────────────────────────────
+#
+# The browser outlives the run. A run that was stopped, or whose approval timed out, leaves
+# a compose window open — and the next task begins inside it, where COMPOSE_ALREADY_OPEN
+# (correct within a run) steers the agent into writing in somebody's abandoned draft.
+#
+# Save & close, never Discard: those are the human's words, and they stay in Drafts.
+
+
+COMPOSE_WITH_CLOSE = """
+<div role="dialog" style="width:600px;height:400px">
+  <img aria-label="Save &amp; close" style="width:20px;height:20px" id="closer">
+  <input name="to" aria-label="To recipients" value="priya@corp.com">
+  <input name="subjectbox" aria-label="Subject" value="half written">
+  <div g_editable="true" contenteditable="true" aria-label="Message Body">draft</div>
+</div>
+"""
+
+#: Gmail uses role="dialog" for settings panes and confirmations too. Closing one of those
+#: because it looked like a draft would be a mystery to debug.
+NOT_A_COMPOSE = """
+<div role="dialog" style="width:300px;height:200px">
+  <img aria-label="Save &amp; close" style="width:20px;height:20px">
+  <p>Are you sure?</p>
+</div>
+"""
+
+
+async def _wire_close(page):
+    """Make the close control behave like Gmail's: it removes the compose window."""
+    await page.evaluate(
+        """() => {
+          const closer = document.getElementById('closer');
+          if (!closer) return;
+          closer.addEventListener('click', () => closer.closest('[role=dialog]').remove());
+        }"""
+    )
+
+
+async def test_it_closes_a_compose_window_left_open_by_an_earlier_run(page):
+    await page.set_content(f"<body>{COMPOSE_WITH_CLOSE}</body>")
+    await _wire_close(page)
+
+    report = await _surface(page).reset()
+
+    assert "compose window" in report
+    assert await page.query_selector('[role="dialog"]') is None
+
+
+async def test_it_says_the_draft_was_kept(page):
+    """A window closing on its own is alarming unless somebody says the words survived."""
+    await page.set_content(f"<body>{COMPOSE_WITH_CLOSE}</body>")
+    await _wire_close(page)
+
+    assert "Drafts" in await _surface(page).reset()
+
+
+async def test_a_clean_page_reports_nothing_and_touches_nothing(page):
+    await page.set_content("<body><div>just the inbox</div></body>")
+
+    assert await _surface(page).reset() == ""
+
+
+async def test_a_dialog_that_is_not_a_compose_window_is_left_alone(page):
+    """Scoped to dialogs that actually hold compose fields."""
+    await page.set_content(f"<body>{NOT_A_COMPOSE}</body>")
+
+    report = await _surface(page).reset()
+
+    assert report == ""
+    assert await page.query_selector('[role="dialog"]') is not None
+
+
+async def test_it_never_clicks_Discard(page):
+    """Irreversible, and nothing irreversible happens outside the approval gate — least of
+    all as a side effect of starting an unrelated task."""
+    html = COMPOSE_WITH_CLOSE.replace(
+        '<img aria-label="Save &amp; close" style="width:20px;height:20px" id="closer">',
+        '<img aria-label="Discard draft" id="discard" style="width:20px;height:20px">'
+        '<img aria-label="Save &amp; close" style="width:20px;height:20px" id="closer">',
+    )
+    await page.set_content(f"<body>{html}</body>")
+    await page.evaluate(
+        """() => {
+          window.__discarded = false;
+          document.getElementById('discard')
+            .addEventListener('click', () => { window.__discarded = true; });
+          const closer = document.getElementById('closer');
+          closer.addEventListener('click', () => closer.closest('[role=dialog]').remove());
+        }"""
+    )
+
+    await _surface(page).reset()
+
+    assert await page.evaluate("() => window.__discarded") is False
+
+
+async def test_it_drops_the_index_map_so_no_referent_survives_the_run(page):
+    """Indices belong to the page they were built from. A new run inheriting them could
+    act on a number that means something else now."""
+    await page.set_content(f"<body>{COMPOSE_WITH_CLOSE}</body>")
+    await _wire_close(page)
+    surface = _surface(page)
+    surface._geometry = {9: (1.0, 2.0)}
+    surface._previous_identities = {"stale"}
+    surface._approved = {"a-fingerprint"}
+    surface._last_observation = object()
+
+    await surface.reset()
+
+    assert surface._geometry == {}
+    assert surface._previous_identities == set()
+    assert surface._approved == set(), "an approval must never outlive its run"
+    assert surface._last_observation is None
+
+
+async def test_a_window_that_will_not_close_is_reported_as_such(page):
+    """**The bug this catches was mine.** The first version of `reset` appended "closed a
+    compose window" unconditionally — it never re-checked after its Escape fallback. A
+    window that refused to close was reported as closed, the cockpit said "Starting fresh",
+    and the agent began inside the stale draft anyway. Exactly the class of lying verb this
+    file exists to remove."""
+    await page.set_content(f"<body>{COMPOSE_WITH_CLOSE}</body>")
+    # No handler wired: the close control does nothing, as an unknown Gmail build would.
+
+    report = await _surface(page).reset()
+
+    assert "could not close" in report
+    assert "closed a compose window" not in report
+    assert await page.query_selector('[role="dialog"]') is not None
+
+
+async def test_escape_is_tried_when_the_close_control_does_nothing(page):
+    """The fallback has to actually run — and be believed only after it is verified."""
+    await page.set_content(f"<body>{COMPOSE_WITH_CLOSE}</body>")
+    await page.evaluate(
+        """() => {
+          document.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape') return;
+            document.querySelector('[role=dialog]').remove();
+          });
+        }"""
+    )
+
+    report = await _surface(page).reset()
+
+    assert "closed a compose window" in report
+    assert await page.query_selector('[role="dialog"]') is None
+
+
+async def test_the_page_referents_are_dropped_even_when_closing_failed(page):
+    """A run that starts on a page we could not tidy must still not inherit indices or an
+    approval from the run before it."""
+    await page.set_content(f"<body>{COMPOSE_WITH_CLOSE}</body>")
+    surface = _surface(page)
+    surface._geometry = {9: (1.0, 2.0)}
+    surface._previous_identities = {"stale"}
+    surface._approved = {"a-fingerprint"}
+    surface._last_observation = object()
+
+    await surface.reset()
+
+    assert surface._geometry == {}
+    assert surface._approved == set(), "an approval outlived its run"
+    assert surface._last_observation is None

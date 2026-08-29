@@ -65,12 +65,31 @@ REPEATABLE_VERBS = frozenset({"Scroll", "WaitFor", "ReadThread", "Observe"})
 PER_TARGET_VERBS = frozenset({"Archive", "Snooze", "MarkRead", "Label", "DraftReply"})
 
 
+#: Verbs whose ANSWER does not depend on their arguments.
+#:
+#: `Extract` returns a fixed sentence — "the element list above is everything visible, field
+#: contents are never included" — whatever it is asked. So the assumption the signature below
+#: rests on ("different arguments mean a different question, and a different question is
+#: progress") is simply false for it: rewording the query produces a brand-new signature and
+#: the identical reply.
+#:
+#: Observed live. Asked to close a compose window that had ALREADY closed, the agent ran
+#: `Extract("what elements correspond to the open compose box…")`, got the canned answer,
+#: rephrased it to `Extract("identify any elements related to the open compose box…")`, and
+#: got the same answer again — two full LLM calls, no new information, and nothing counting
+#: them as a repeat. Nothing would have stopped ten.
+ARGS_INDEPENDENT_VERBS = frozenset({"Extract"})
+
+
 def action_signature(call: ActionCall) -> str:
     """A stable identity for "the same action again".
 
     Includes arguments, so archiving thread 3 and thread 9 are different actions while
-    clicking the same dead button twice is the same one.
+    clicking the same dead button twice is the same one — EXCEPT for the verbs above, whose
+    reply is the same however the question is worded.
     """
+    if call.name in ARGS_INDEPENDENT_VERBS:
+        return f"{call.name}:*"
     args = json.dumps(call.args, sort_keys=True, default=str)
     return f"{call.name}:{hashlib.sha1(args.encode()).hexdigest()[:12]}"
 

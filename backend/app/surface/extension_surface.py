@@ -100,6 +100,20 @@ class ExtensionEmailSurface:
             return ActionResult(success=False, reason=str(exc), error_code=exc.code)
         return ActionResult.model_validate(raw)
 
+    async def reset(self) -> str:
+        """Ask the extension to clear anything a previous run left open.
+
+        Best-effort by design: this drives the user's OWN browser, where a tab may have been
+        closed or navigated away between runs. A reset that cannot run is a slightly messier
+        starting state, never a reason to refuse the task the human just asked for.
+        """
+        try:
+            raw = await self._call("reset", {})
+        except Exception as exc:
+            logger.info("extension could not reset the page: %s", exc)
+            return ""
+        return str(raw or "")
+
     async def preview(self, call: ActionCall) -> str:
         """The RESOLVED draft, read from the live compose fields.
 

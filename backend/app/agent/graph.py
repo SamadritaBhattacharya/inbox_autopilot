@@ -186,16 +186,40 @@ def build_finalize_node():
     return finalize
 
 
-def build_dispatch_node(emitter: EventEmitter):
-    """Hand the run to a worker.
+def build_dispatch_node(emitter: EventEmitter, surface: EmailSurface | None = None):
+    """Hand the run to a worker, starting from a known page.
 
     Deliberately does NOT touch `active_worker`: the gate chose it from the intent, and it
     is the worker's *capability set*. `route.topology` is how that worker runs — linear or
     decision. Two different questions, and overwriting one with the other would hand a
     `summarize` request the triage tool set.
+
+    **Why the reset lives here.** The browser outlives the run; `AgentState` does not. A run
+    that was stopped, or whose approval timed out, leaves a compose window open — and the
+    next task then begins inside a stranger's half-written email, where
+    `COMPOSE_ALREADY_OPEN` (correct within a run) steers it into writing there instead of
+    starting fresh. Dispatch is the boundary between "we have decided what to do" and
+    "something is about to touch the mailbox", which makes it the one place where a clean
+    starting page is exactly the contract.
+
+    Not in PRE: that phase mutates nothing, and closing a window is a mutation however
+    benign. Not in the worker loop: it is once per run, not once per step.
     """
 
     async def dispatch(state: AgentState) -> dict:
+        cleared = ""
+        if surface is not None:
+            try:
+                cleared = await surface.reset()
+            except Exception:  # pragma: no cover - defensive
+                # A dirty starting page is a worse run, not a dead one. Refusing the task a
+                # human just asked for because we could not tidy up first would be the
+                # wrong trade every time.
+                logger.warning("could not reset the surface before dispatch", exc_info=True)
+        if cleared:
+            logger.info("dispatch reset the page: %s", cleared)
+            await emitter.status("running", f"Starting fresh — {cleared}")
+
         worker = worker_for(state.intent.action if state.intent else Action.ANSWER)
         await emitter.status(
             "running",
@@ -260,7 +284,7 @@ def build_manager_graph(
     graph.add_node(ROUTER, build_router_node(llm, rules, emitter))
     graph.add_node(PLANNER, build_planner_node(llm, emitter))
     graph.add_node(WRITER, build_writer_node(llm, emitter))
-    graph.add_node(DISPATCH, build_dispatch_node(emitter))
+    graph.add_node(DISPATCH, build_dispatch_node(emitter, surface))
     graph.add_node(FINALIZE, build_finalize_node())
 
     if surface is not None:

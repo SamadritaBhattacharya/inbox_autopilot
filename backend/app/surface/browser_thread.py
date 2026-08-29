@@ -108,6 +108,11 @@ class ThreadedSurface:
     async def act(self, call: ActionCall) -> ActionResult:
         return await self._loop.call(self._surface.act(call))
 
+    async def reset(self) -> str:
+        """Clearing a leftover compose window clicks and navigates, so it belongs on the
+        browser loop like everything else that touches the page."""
+        return await self._loop.call(self._surface.reset())
+
     async def preview(self, call: ActionCall) -> str:
         """The fourth port method, and the one whose absence broke every send on Windows.
 
