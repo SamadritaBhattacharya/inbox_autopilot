@@ -42,6 +42,15 @@ export type Entry =
 
 export type PendingApproval = {
   requestId: string;
+  /**
+   * Which ask this is: 1 for the first approval of the run, 2 for the next, and so on.
+   *
+   * The dismiss-on-click bookkeeping keys on THIS rather than on `requestId`, because a
+   * request id is the identity of a decision, not of an asking. Re-proposing the same
+   * email after an edit that changed nothing is a genuinely new question with the same id,
+   * and keying on the id hid it.
+   */
+  ask: number;
   kind: string;
   summary: string;
   /** The RESOLVED draft. Cockpit-only — never re-enters the model's context. */

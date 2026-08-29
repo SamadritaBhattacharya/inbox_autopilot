@@ -49,6 +49,16 @@ export function useAgentRun(threadId: string, task?: string) {
    * answer locally dismisses it on the click that caused it.
    */
   const [answered, setAnswered] = useState<Set<string>>(new Set());
+  /**
+   * The approval ask the human has already decided, by ordinal.
+   *
+   * Approvals do NOT use the set above, and that is the whole fix for "I edited the draft
+   * and nothing happened". An approval's `requestId` identifies the decision — the action
+   * plus the exact words — so the gate re-asking about a draft that came back unchanged
+   * reuses it. Recorded in a set of ids, that second card was hidden as already-answered
+   * and the run waited at an interrupt nobody could see.
+   */
+  const [decidedAsk, setDecidedAsk] = useState(0);
   // Transient by design: the LATEST activity replaces the last one, and it is cleared
   // when the run ends. Keeping a history of them would just be a noisier transcript.
   const [activity, setActivity] = useState<Activity | null>(null);
@@ -156,8 +166,7 @@ export function useAgentRun(threadId: string, task?: string) {
   // Hide anything the human has already acted on. The backend is still the authority — it
   // simply has not answered yet, and a card that lingers after a click reads as broken.
   const question = pendingQuestion && !answered.has(pendingQuestion.requestId) ? pendingQuestion : null;
-  const approval =
-    pendingApproval && !answered.has(pendingApproval.requestId) ? pendingApproval : null;
+  const approval = pendingApproval && pendingApproval.ask > decidedAsk ? pendingApproval : null;
   const options = pendingOptions && !answered.has(pendingOptions.requestId) ? pendingOptions : null;
 
   const answer = useCallback(
@@ -177,7 +186,7 @@ export function useAgentRun(threadId: string, task?: string) {
       // rewritten email.
       send({ type: "decision", verdict, edit: edit ?? "", editedPreview: editedPreview ?? "" });
       setStatus("running");
-      if (pendingApproval) setAnswered((seen) => new Set(seen).add(pendingApproval.requestId));
+      if (pendingApproval) setDecidedAsk(pendingApproval.ask);
     },
     [send, pendingApproval],
   );
@@ -353,10 +362,13 @@ function latestQuestion(events: AgentEvent[]): PendingQuestion | null {
 /** The approval still waiting, if any. Cleared by its own result event. */
 function latestApproval(events: AgentEvent[]): PendingApproval | null {
   let pending: PendingApproval | null = null;
+  let ask = 0;
   for (const { event, data } of events) {
     if (event === "approval_request") {
+      ask += 1;
       pending = {
         requestId: str(data.requestId),
+        ask,
         kind: str(data.kind, "bulk"),
         summary: str(data.summary),
         preview: str(data.preview),

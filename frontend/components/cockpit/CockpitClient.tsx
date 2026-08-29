@@ -141,7 +141,16 @@ export function CockpitClient({ threadId, task }: { threadId: string; task?: str
         >
           <Transcript timeline={timeline} />
           {question && <QuestionCard question={question} onAnswer={answer} />}
-          {approval && <ApprovalCard approval={approval} onDecide={decide} />}
+          {/* Keyed by the ask, so a re-proposed draft mounts a FRESH card. Reusing one
+            * card across asks left the previous edit sitting in the textarea, under a
+            * different email. */}
+          {approval && (
+            <ApprovalCard
+              key={`${approval.requestId}-${approval.ask}`}
+              approval={approval}
+              onDecide={decide}
+            />
+          )}
           {options && <OptionsCard options={options} onChoose={choose} />}
           {activity && !question && !approval && !options && (
             <div className="rise flex items-center gap-2.5 py-3">

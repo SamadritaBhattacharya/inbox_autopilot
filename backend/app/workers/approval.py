@@ -198,6 +198,25 @@ def draft_from_preview(text: str, *, tone: str = "professional") -> Draft | None
     return Draft(subject=subject, body=body, tone=tone)
 
 
+def recipients_from_preview(text: str) -> str | None:
+    """The `To:` line of a preview, or `None` if there is no header to read.
+
+    Separate from `draft_from_preview` because the recipient is not part of the draft: it
+    lives in `intent.slots` and, in the browser, it is a CHIP rather than text. Editing it
+    therefore needs a different repair — remove a chip, type a token — and merging the two
+    would hide that behind a field assignment that cannot work.
+
+    Returns `""` for an explicitly empty To line, which is meaningfully different from
+    `None`: the human clearing the recipient is an instruction, the absence of a header is
+    a preview this function cannot read.
+    """
+    for line in text.splitlines():
+        if line.strip().lower().startswith("to:"):
+            value = line.split(":", 1)[1].strip()
+            return "" if value == "(empty)" else value
+    return None
+
+
 def decision_from(payload: object) -> Decision:
     """Parse whatever came back through the interrupt.
 

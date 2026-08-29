@@ -253,8 +253,19 @@ async def ws_run(
                     run.answer(
                         {
                             "verdict": message.get("verdict"),
-                            "edit": message.get("edit", ""),
-                            # The draft as the human retyped it, applied verbatim.
+                            # Tokenized at the boundary, exactly as mid-run feedback is.
+                            # "send it to alex@corp.com" is the operator's own words, so the
+                            # address is trusted input — but it must not reach the model in
+                            # the clear, and the dispatcher only ever accepts minted tokens,
+                            # so an untokenized correction could not be carried out even
+                            # when it was perfectly understood.
+                            "edit": trust_addresses(str(message.get("edit", "")), run.vault),
+                            # NOT tokenized: this is the draft as the human retyped it, and
+                            # the body is typed into Gmail verbatim. The dispatcher
+                            # deliberately refuses to substitute tokens inside free text
+                            # (`_is_all_tokens`), so minting here would type the characters
+                            # "P7" into the email. The To: line is handled separately in the
+                            # gate, which is the one part of it that addresses anything.
                             "editedPreview": message.get("editedPreview", ""),
                             "reason": message.get("reason", ""),
                         }

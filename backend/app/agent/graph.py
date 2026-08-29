@@ -293,6 +293,10 @@ def build_manager_graph(
                 # proposed action. Recording them is what gives the promotion path
                 # anything to count.
                 feedback=feedback,
+                # Mints an address the human types into the card's To: line. Without it
+                # a retargeted email is understood and then sent to the original
+                # recipient — the dispatcher only ever accepts vault tokens.
+                vault=vault,
             ),
         )
 

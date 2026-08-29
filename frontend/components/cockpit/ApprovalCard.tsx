@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { PendingApproval } from "@/lib/types";
 
 /**
@@ -41,17 +41,15 @@ export function ApprovalCard({
 }) {
   const [editing, setEditing] = useState(false);
   const [edit, setEdit] = useState("");
-  // The draft, as the human may retype it. Seeded from the preview and reset whenever a new
-  // approval arrives — a revised draft must not be shown under the previous edit.
+  // The draft, as the human may retype it.
+  //
+  // Seeded once, because the caller mounts a NEW card per ask (`key`) rather than reusing
+  // this one. It used to be re-seeded from an effect, which is a cascading render for
+  // something a remount does for free — and, more to the point, an effect can only reset
+  // what it is told changed. Identity belongs to the ask.
   const [draft, setDraft] = useState(approval.preview);
   const tone = TONE[approval.kind as keyof typeof TONE] ?? TONE.bulk;
   const destructive = approval.kind === "delete";
-
-  useEffect(() => {
-    setDraft(approval.preview);
-    setEdit("");
-    setEditing(false);
-  }, [approval.requestId, approval.preview]);
 
   const rewritten = draft.trim() !== approval.preview.trim();
 
@@ -116,7 +114,7 @@ export function ApprovalCard({
       />
       {rewritten && (
         <p className="px-4 pt-1.5 font-mono text-[10px] text-pending">
-          edited — Revise applies your text exactly as written
+          edited — your text is applied exactly as written, then shown again to confirm
         </p>
       )}
 
@@ -162,7 +160,11 @@ export function ApprovalCard({
             onClick={() => setEditing(true)}
             className="transition-smooth rounded-[--radius-control] border border-line px-4 py-2 text-[13px] text-muted hover:border-line2 hover:text-text"
           >
-            {rewritten ? "Revise" : "Change something"}
+            {/* Two buttons that did the same thing was the confusing part. When the draft
+              * has been retyped, THIS one adds words on top of it ("and make it warmer");
+              * the primary applies the text alone. Labelling both "Revise" made the
+              * primary look like the one that did nothing. */}
+            {rewritten ? "Add an instruction" : "Change something"}
           </button>
           <button
             type="button"

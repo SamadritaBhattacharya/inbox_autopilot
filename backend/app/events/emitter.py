@@ -202,6 +202,13 @@ class EventEmitter:
         )
 
     async def approval_result(self, request_id: str, verdict: str) -> None:
+        # A decision closes the replay window. The dedup above exists to swallow the SAME
+        # pending card re-emitted when a node re-executes on resume; once a human has
+        # actually decided, any further request is a new question and must reach them —
+        # even if it happens to carry the same id. Leaving the key set is how an edited
+        # draft was re-proposed and never shown, so the run waited at an interrupt for a
+        # card that had been dropped one layer below the UI.
+        self._last = None
         await self._emit(protocol.APPROVAL_RESULT, {"requestId": request_id, "verdict": verdict})
 
     async def diagnosis(self, cause: str, plain: str, evidence: str = "") -> None:
