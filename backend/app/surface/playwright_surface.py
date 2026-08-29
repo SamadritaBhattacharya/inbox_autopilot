@@ -51,10 +51,54 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+#: Every verb this surface implements. THE allowlist: `act()` refuses anything else.
+#:
+#: **Split out from `TIMEOUTS`, which used to be both.** One dictionary answered two
+#: unrelated questions — "how long may this take?" and "may this run at all?" — so
+#: forgetting a timeout SILENTLY REVOKED A CAPABILITY. Five verbs were written, tested, and
+#: unreachable: `OpenFolder`, `Label`, `MarkRead`, `Snooze`, `DeleteForever`. The whole
+#: TriageWorker was crippled, since three of its four verbs were among them.
+#:
+#: The failure had no symptom until runtime, and then the wrong one: the model was OFFERED
+#: `OpenFolder`, correctly chose it on its first turn, and was told the verb does not exist.
+#: Asked to open the Sent folder it spent eight turns clicking through menus instead of one,
+#: and burned a day's free-tier token budget doing it.
+#:
+#: Kept in step with reality by `_assert_verbs_are_implemented` below, at import.
+SURFACE_VERBS: frozenset[str] = frozenset(
+    {
+        # perception / navigation
+        "Navigate",
+        "OpenFolder",
+        "Click",
+        "ReadThread",
+        "Scroll",
+        "WaitFor",
+        # composing
+        "Type",
+        "Clear",
+        "PressKey",
+        # triage
+        "Archive",
+        "Label",
+        "MarkRead",
+        "Snooze",
+        # irreversible — bound here, but gated by the approval interrupt before dispatch
+        "Send",
+        "DeleteForever",
+    }
+)
+
 #: Per-verb timeout walls. A breach is `ACTION_TIMEOUT` — a typed failure the recovery layer
 #: can classify, never an indefinite hang.
+#:
+#: Absence is no longer meaningful: a verb with no entry gets `DEFAULT_TIMEOUT`. That is the
+#: point of the split — a forgotten timeout should cost a slightly wrong deadline, never a
+#: capability.
 TIMEOUTS: dict[str, float] = {
     "Navigate": 30.0,
+    # A folder switch is a page load, not a click: Gmail re-renders the whole list.
+    "OpenFolder": 15.0,
     "Click": 10.0,
     "ReadThread": 10.0,
     "Type": 10.0,
@@ -62,7 +106,12 @@ TIMEOUTS: dict[str, float] = {
     "PressKey": 5.0,
     "Scroll": 5.0,
     "Archive": 10.0,
+    "Label": 10.0,
+    "MarkRead": 10.0,
+    # Opens a menu and picks a date — two interactions and an animation between them.
+    "Snooze": 15.0,
     "Send": 20.0,
+    "DeleteForever": 15.0,
     "WaitFor": 30.0,
 }
 DEFAULT_TIMEOUT = 10.0
@@ -399,7 +448,7 @@ class PlaywrightEmailSurface:
         self._geometry: dict[int, tuple[float, float]] = {}
         self._last_observation: Observation | None = None
         self._previous_identities: set[str] = set()
-        self._bound_verbs = frozenset(bound_verbs or TIMEOUTS.keys())
+        self._bound_verbs = frozenset(bound_verbs or SURFACE_VERBS)
         self._approved: set[str] = set()
         self._cdp = None
 
@@ -1481,6 +1530,43 @@ def _browser_root() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Caches" / "ms-playwright"
     return Path.home() / ".cache" / "ms-playwright"
+
+
+def _assert_verbs_are_implemented() -> None:
+    """The declared verbs and the implemented handlers must be the same set. Checked at import.
+
+    **Both directions have already gone wrong here, and neither failed loudly.**
+
+    A handler with no declaration is a capability nobody can reach: `_do_openfolder`,
+    `_do_label`, `_do_markread`, `_do_snooze` and `_do_deleteforever` were all written and
+    all refused at dispatch, because the allowlist was a second list that nobody updated.
+
+    A declaration with no handler is worse. `Send` was bound for months with no
+    `_do_send`, so every approval a human granted ended in "Send has no handler" — at the
+    exact moment they had just authorised a send.
+
+    An import-time assertion rather than a test, for the same reason the funnel asserts its
+    stage order at import: this is a claim about whether the module is *coherent*, and a
+    module that cannot keep its own promises should not load.
+    """
+    implemented = {
+        name[len("_do_") :] for name in vars(PlaywrightEmailSurface) if name.startswith("_do_")
+    }
+    declared = {verb.lower() for verb in SURFACE_VERBS}
+
+    if unreachable := implemented - declared:
+        raise RuntimeError(
+            f"handlers with no verb declared, so nothing can call them: {sorted(unreachable)}. "
+            "Add them to SURFACE_VERBS."
+        )
+    if unimplemented := declared - implemented:
+        raise RuntimeError(
+            f"verbs declared with no handler, so every call fails at dispatch: "
+            f"{sorted(unimplemented)}. Implement `_do_<verb>` or remove from SURFACE_VERBS."
+        )
+
+
+_assert_verbs_are_implemented()
 
 
 def resolve_chromium(*, headless: bool = True) -> str | None:

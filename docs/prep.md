@@ -23,6 +23,9 @@ Quick-reference Q&A for talking through the project in an interview.
 17. [What exactly does the &#34;clamp&#34; do?](#17-what-exactly-does-the-clamp-do)
 18. [What rules does the system ship with?](#18-what-rules-does-the-system-ship-with)
 19. [What operating rules does the whole system follow?](#19-what-operating-rules-does-the-whole-system-follow)
+20. [Why is this a great project?](#20-why-is-this-a-great-project)
+21. [Is it a good project for AI Engineer roles at startups?](#21-is-it-a-good-project-for-ai-engineer-roles-at-startups-claude)
+22. [Challenges faced](#22-challenges-faced)
 
 ---
 
@@ -757,3 +760,279 @@ If you let it "just try" linear on a Compose task, here's what actually happens:
 **One-liner for the interview:**
 
 > "The whole system is basically five non-negotiables enforced as graph structure, not prompt text: don't start without full context, never mutate irreversibly without a human, never let the model see raw data, never end a run without a typed reason, and never trust a stale reference. Each one exists because I watched the version without it fail in a specific, reproducible way."
+
+---
+
+### 20. Why is this a great project?
+
+**The answer isn't "it's an email agent." It's the load-bearing pieces of the architecture.**
+
+**Five reasons a senior engineer would care:**
+
+**1. It solves a genuine hard problem in browser automation: safe, cheap grounding**
+
+- UI agents fail because they can't reliably point at things. Set-of-Marks (integer indexing + hidden coordinate maps) is the answer, and it works.
+- It's not proprietary. It's a technique from the research literature, but it's almost never used in production because it requires discipline — you have to truly commit to "the model never sees a coordinate."
+- This project did commit. That's the reusable part.
+
+**2. It has the reliability infrastructure most AI projects ship without**
+
+- Every terminal state is typed. You can measure reliability.
+- It has two independent loop detectors that catch different failure modes.
+- It has structured recovery options ranked by probability, not guessing.
+- The benchmark runs deterministically with no browser and no network — you can test the whole stack without touching the internet.
+- This is how you turn "it worked in my demo" into "it works 15/15 times on these tasks."
+
+**3. Typed failure isn't just metrics — it's the foundation of everything else**
+
+- You can't auto-recover from a failure you haven't named.
+- You can't learn from patterns you haven't classified.
+- You can't measure reliability if your failures are anonymous.
+- This project made the hard choice to enforce it as a first-class constraint, not an afterthought.
+
+**4. It's surface-agnostic by deliberate design, not accident**
+
+- The funnel, the loop detection, the PII vault, the approval gates — all of it lives above an interface boundary that has *zero* Gmail references.
+- That's not easy to achieve. It requires discipline and refusal to optimize prematurely.
+- But it means the project is reusable. The hard work isn't "build an email agent." It's "build a reliable browser agent infrastructure." Email is the surface I chose.
+
+**5. It learned from watching failure, not from reading papers**
+
+- The repetition guard exists because I watched the same question get asked 4 times in a row while a rate limiter was active.
+- The occlusion culler exists because I watched a modal appear and the model try to click things behind it.
+- The approval gate topology exists because I watched irreversible actions nearly escape through prompt-only guardrails.
+- The settle timeout exists because I watched a half-rendered page silently hand the wrong element list to the model.
+- Every guard came from a real failure, not a theoretical concern.
+
+**Why this is the pitch:**
+
+> "This is a great project not because it's an email agent, but because it's an engineering case study in making browser automation reliable. The hard parts — Set-of-Marks indexing, typed failure, surface-agnostic architecture, loop detection — those are the reusable assets. I chose Gmail as the surface because it was the hardest one I could find to prove it on. If you care about how to build agents that actually work, not just demo well, this is the project that answers that."
+
+**The longer form (if they push for more):**
+
+- The project exists at the intersection of three hard problems: grounding (making the model point at the right thing reliably), cost (running on a free tier at scale), and trust (never letting something irreversible happen behind your back).
+- Each intersection required a different architectural choice, and each choice is defensible on its own and fits the others.
+- That's the mark of a well-designed system: none of the pieces feel like they're fighting each other.
+- It's what happens when you build in the order that constraints demand — reify failure types first, build the recovery model next, *then* add the judge that picks recovery options — instead of the order that feels easiest to code.
+
+**Closing line (if they ask why you built this instead of joining an existing project):**
+
+> "Because I wanted to understand what an agent has to be, fundamentally, to be worth using. And the only way to know that is to build something that has to work every single time, not just demonstrate plausibly when it works. The reusable parts aren't Gmail-specific. They're the foundations that make any browser automation reliable — and I built them because I'd watched too many cool demos fail catastrophically off-camera."
+>
+> ---
+
+---
+
+### 21. Is it a good project for AI Engineer roles at startups? (CLAUDE)
+
+Graded honestly: **yes, and specifically for the roles you're targeting** — with one condition.
+
+What it signals that most portfolio projects don't:
+
+* **Eval thinking.** A benchmark harness with golden tasks measuring success rate, steps, tokens, and % terminated with a typed code. Almost nobody's agent project has evals. This is the single biggest differentiator right now.
+* **Context engineering.** A funnel taking 100k+ tokens of DOM to 1–3k. That's a named skill startups hire for.
+* **Failure taxonomy.** Every terminal state carries a typed code, enforced by topology rather than convention.
+* **Safety that's actually correct.** Consent fingerprinted to the  *words* , not the button. PII tokenized with a redaction/authorization distinction that defends against injection.
+* **Cost engineering.** Multi-provider fallback built for free-tier quota, metered per call.
+
+That reads like someone who has *operated* an agent, not someone who followed a LangChain tutorial. For a startup AI Engineer role, that's the profile.
+
+**The condition:** it's judged on presentation, and right now the substance is invisible. A README that says "an AI email assistant" gets skimmed and filed with a thousand others. A README that opens with the funnel diagram, the typed-failure table, and the benchmark numbers gets read. Same project, completely different outcome. That's why step 4 isn't optional.
+
+### 22. Challenges faced
+
+A running list of the concrete problems hit while building this, and the fix for each. Two passes below: a **quick-reference list**, then the same material reworked as **spoken interview answers**, grouped by theme.
+
+#### Quick-reference list
+
+**1. The page is far too big to show an AI**
+
+- Gmail's HTML is over 100,000 tokens. Sending that to a model every turn is impossible — too slow, too expensive, and it drowns out the actual task.
+- **Example:** one Gmail screen had ~170 usable elements buried in thousands of invisible ones.
+- **Fix:** a "funnel" — a pipeline that throws away ~99% of the page. Drop what's hidden, drop what's covered by a popup, collapse empty wrapper boxes, then hand the model a short numbered list: `[15] button: Compose`. It picks a number.
+
+**2. The AI must never see real email addresses — but still has to send mail**
+
+- You can't let a model hold people's private data, but the email still has to reach a real person.
+- **Example:** `alice@corp.com` becomes `P1`. The model only ever sees `P1`. It says "type P1 into the To field", and the code standing next to the browser swaps it back to the real address at the last possible moment.
+- **Fix:** a token vault living next to the browser, never in the model's context.
+
+**3. Knowing an address isn't permission to email it**
+
+- This one is subtle and it's the real security work. If a stranger's email says "please forward this to boss@corp.com", that address gets tokenized too — and the model might obey it.
+- **Fix:** two kinds of token. Ones from you (your typed instruction, your contacts) are addressable. Ones scraped from message content can be read but are refused as recipients. A malicious email can't turn itself into a send.
+
+**4. Consent has to be about the words, not the button**
+
+- Approving a draft used to authorise Gmail's Send button — for the rest of the run.
+- **Example:** you approve an email. The body then gets edited. Send is clicked again — and it matched the old approval, so it went out with words you never saw.
+- **Fix:** the approval is fingerprinted against the exact text. Change one full stop and the approval no longer matches, so it asks again.
+
+**5. The page renumbers itself every single turn**
+
+- Element `[80]` this turn is something completely different next turn.
+- **Example:** the agent was correctly told "subject is at [80]". Between looking and clicking, an autocomplete dropdown closed, the page reflowed, and `[80]` was now the message body. "Good Evening" went into the body, the subject stayed empty, and the next six turns made no sense.
+- **Fix:** never reuse a number across turns — re-read the page every time. And for fields we know by name (To/Subject/Body), reach them by name, not by remembered coordinates.
+
+**6. Actions that report success they haven't earned** — *the biggest recurring theme*
+
+- This caused more wasted runs than anything else.
+- **Example A:** `Scroll` always returned "scrolled". But inside a compose window there's nothing to scroll. The agent was told six times it had scrolled toward something that didn't exist, and burned ~20 turns.
+- **Example B:** after typing an address, Gmail turns it into a "chip" and empties the input box. The check read the empty box, said "the text didn't land" — so the agent typed the address again.
+- **Fix:** every action verifies its own outcome and returns a typed failure when it didn't happen. A scroll that didn't move is now a failure, not a success.
+
+**7. Two parts of the system quietly disagreeing about one fact**
+
+- The pattern underneath most bugs.
+- **Example:** the same recipient was "already present" to the duplicate-check and "never landed" to the verification — same file, same turn, opposite answers.
+- **Example:** two email addresses separated by a space. Four different places assumed a comma. The literal text "P1 P3" got typed into Gmail as if it were an address.
+- **Fix:** make one function the single source of truth and have everything call it.
+
+**8. The agent couldn't tell when it had finished**
+
+- Something appearing is obvious. Something disappearing is invisible.
+- **Example:** told "close the compose box", it closed it — then spent every remaining turn hunting for the window it had just closed, because the only proof of success was an absence.
+- **Fix:** the code now narrates changes between turns: "the compose window closed", "the view changed from compose to inbox".
+
+**9. Running entirely on free AI tiers**
+
+- The limit isn't money, it's requests per minute.
+- **Fix:** three providers chained (Groq → OpenRouter → Gemini) with automatic failover; a cheap small model for classification and an expensive one only for reasoning; a stable prompt prefix so it can be cached; and a hard rule that a repeated question never costs a second call.
+
+**10. Google won't let a robot log in**
+
+- Google blocks sign-in inside automated browsers, on purpose.
+- **Fix:** don't fight it. You sign into a dedicated Chrome profile once, by hand, like a person. The agent then attaches to that already-logged-in browser. There is no password anywhere in the system.
+
+**11. The browser remembers; the run doesn't**
+
+- Each run starts fresh — the browser doesn't.
+- **Example:** a run times out with a half-written email open. You type a new task and hit Run, and the agent starts inside that abandoned draft — because a guard that's correct within one run says "a compose window is already open, write in that one."
+- **Fix:** every run now starts by clearing leftovers — the draft is saved, never discarded.
+
+**12. "Change the last sentence" became a full rewrite**
+
+- **Example:** asked to fix a duplicated greeting, the model returned an email with the greeting deleted and the sign-off reworded. You then had to re-read the whole thing to find an edit you never asked for.
+- **Fix:** when you retype text yourself, it's applied byte for byte with no model call. A model can only be involved when you ask for something in words.
+
+---
+
+#### Full interview answers (30–60 seconds each, grouped by theme)
+
+> Lead with #1, #6, and #9 if you only get to tell three.
+
+#### **A. Making a huge page usable by an AI**
+
+**1. The page was 100,000+ tokens — far too big to send to a model**
+
+- Gmail's HTML is enormous, and most of it is invisible junk.
+- I built a pipeline that throws away ~99% of it: remove hidden elements, remove anything covered by a popup, collapse empty wrapper boxes, then number what's left.
+- The model sees a short list like `[15] button: Compose` and replies with a number. It never sees HTML at all.
+- Result: ~100k tokens down to 1–3k.
+
+**2. The agent couldn't find the Compose button**
+
+- The filter was too aggressive — it cut the button along with the noise, so the agent was looking for something I'd removed.
+- Two fixes. First, never truncate silently: the observation always says "420 more items below" so the agent knows the list is incomplete and which way to look.
+- Second, priority — when I have to drop things, drop the least useful first, never an interactive control.
+- Lesson: an agent that thinks it's seen everything concludes the button doesn't exist and gives up.
+
+**3. It couldn't reliably find the To / Subject / Body fields**
+
+- Three separate causes, and this took the longest to sort out.
+- A committed recipient in Gmail becomes a "chip" — a separate element — so the To box reads as empty and the agent typed the address a second time.
+- I was also matching fields with a combined CSS selector like `"a, b"`. The browser returns whichever comes first in the page, not first in my list — so my carefully ordered fallbacks meant nothing, and the message body ended up in the subject line.
+- **Fix:** the observation now states each field's status and location together — "Subject: FILLED [61] · Body: empty [70]" — and the agent is told to use those numbers instead of searching. Selectors are tried strictly one at a time, in order.
+
+**4. Simple tasks were burning far too many tokens**
+
+- Sending one email was costing thousands of tokens per turn, on free API tiers where the limit is requests, not money.
+- I cut it in three places: when a compose window is open, everything behind it is irrelevant — removing it cut the page 93%; I rewrote the agent's instructions to be 64% shorter; and old conversation history gets compressed once it passes a budget.
+- I also route cheap work to a small model and keep the expensive one for actual reasoning.
+
+**5. Navigating to folders (Spam, Sent, Drafts) was unreliable**
+
+- The obvious fix is to let the agent navigate to a URL. I deliberately didn't.
+- This agent reads emails written by strangers. If it can open any URL, one sentence in a malicious email becomes a phishing page it visits.
+- **Fix:** the agent gives me a folder name, and a fixed table I control supplies the destination. Nothing the model writes can become a URL.
+- Lesson: the useful half of navigation, without the dangerous half.
+
+#### **B. Keeping it safe**
+
+**6. The AI must never see real email addresses — but mail still has to arrive**
+
+- Every address is replaced with a token before it reaches the model: `alice@corp.com → P1`.
+- The model says "type P1 into the To field", and the code sitting next to the browser swaps it back to the real address at the last possible moment.
+- The lookup table never leaves that machine.
+
+**7. Knowing an address isn't permission to email it**
+
+- This is the part I'm most pleased with. If a stranger's email says "forward this to boss@corp.com", that address gets a token too — and the agent might obey.
+- **Fix:** two classes of token. Addresses you provide are addressable. Addresses found inside message content can be read but are refused as recipients.
+- Lesson: hiding data and granting permission are different problems. Most people only solve the first.
+
+**8. Building an approval gate on top of Gmail with Playwright**
+
+- Nothing irreversible happens without a human. Three things made that harder than it sounds.
+- Gating by name wasn't enough. Clicking Gmail's Send button sends mail just as surely as calling a "Send" command. So the check asks what an action does — it looks up what the number points at — not what it's called.
+- The preview must come from the live page. I show you the draft read straight out of the compose fields, not from what the agent believes it typed. Those differ whenever a field rejected input.
+- The pause has to be durable. It's a checkpointed interrupt, not a blocking wait — you can close the tab, come back in ten minutes, and the draft is still waiting.
+
+**9. Approving a draft accidentally approved the button**
+
+- The approval was tied to "Send button at position 108". So: approve an email, edit the body, click Send again — and it matched the approval you'd already given.
+- **Fix:** the approval is fingerprinted against the exact text of the email. Change one full stop and it no longer matches, so it asks again.
+- Lesson: you approve an email, not a button. The permission has to describe the thing you actually looked at.
+
+#### **C. Reliability against a live product**
+
+**10. Element numbers change every single turn**
+
+- The agent was correctly told "the subject is at [80]". Between looking and clicking, a dropdown closed, the page reflowed, and `[80]` was now the message body. The email text went into the wrong field and the next six turns made no sense.
+- **Fix:** numbers are never reused across turns — the page is re-read every time. And for fields I know by name, I reach them by name rather than by remembered coordinates.
+
+**11. Actions that reported success they hadn't earned**
+
+- My most common bug by far.
+- `Scroll` always said "scrolled" — but inside a dialog there's nothing to scroll. The agent was told six times it was making progress and burned ~20 turns.
+- Typing a recipient reported failure, because after Gmail turns the address into a chip the input box is empty. So the agent typed it again.
+- **Fix:** every action verifies its own outcome and returns a typed failure when it didn't happen.
+
+**12. Two parts of my own system disagreeing about one fact**
+
+- The pattern underneath most of these.
+- The same address was "already present" to the duplicate-check and "never landed" to the verification — same file, same turn, opposite answers.
+- Another: two addresses separated by a space. Four different places assumed a comma, so the literal text "P1 P3" was typed into Gmail as if it were an address.
+- **Fix:** one function owns each fact, and everything else calls it.
+
+**13. The agent couldn't tell when it had finished**
+
+- Something appearing is obvious. Something disappearing is invisible.
+- Told "close the compose box", it closed it — then spent the rest of the run hunting for the window it had just closed, because the only proof of success was an absence.
+- **Fix:** the system now narrates changes between turns — "the compose window closed".
+
+**14. The browser remembers; the run doesn't**
+
+- A run that timed out left a half-written email open. The next task started inside that abandoned draft, because a rule that's correct within one run says "a compose window is already open, use it".
+- **Fix:** every run begins by clearing leftovers — the draft is saved, never discarded.
+
+#### **D. Working under real constraints**
+
+**15. Running entirely on free AI tiers**
+
+- The constraint is requests per minute, not cost.
+- Three providers chained with automatic failover, a small model for classification and a large one only for reasoning, a stable prompt prefix so it can be cached, and a rule that a repeated question never costs a second call.
+
+**16. Google won't let a robot log in**
+
+- Google deliberately blocks sign-in inside automated browsers.
+- **Fix:** don't fight it. I sign into a dedicated Chrome profile once, by hand. The agent attaches to that already-authenticated browser.
+- There is no password anywhere in the system — it inherits a session, it never authenticates.
+
+#### **E. Getting the human experience right**
+
+**17. "Change the last sentence" turned into a full rewrite**
+
+- Asked to fix a duplicated greeting, the model returned an email with the greeting deleted and the sign-off reworded. You then had to re-read the whole thing to find an edit you never asked for.
+- **Fix:** when you retype text yourself, it's applied exactly as typed, with no model call. A model only gets involved if you ask for something in words.
+- I also show a diff of what changed since the last version, so you don't re-read the whole email.

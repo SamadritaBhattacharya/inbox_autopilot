@@ -232,7 +232,15 @@ COMPOSE_TOOLS: tuple[type[BaseModel], ...] = (
     Type,
     Clear,
     PressKey,
-    DraftReply,
+    # `DraftReply` is deliberately NOT here. The class is defined, and no surface implements
+    # it — there is no `_do_draftreply` anywhere. Offering it meant the model could pick a
+    # verb that cannot work, spend a turn being refused, and then improvise around a
+    # capability it had been promised.
+    #
+    # This is the `AskUser` lesson applied: a verb that is bound and then not handled is
+    # WORSE than one that was never offered, because the model reasons at length about
+    # whether it called the tool wrongly. Re-add it the day a surface implements it, and the
+    # test in `tests/workers/test_every_offered_verb_is_dispatchable.py` will confirm it.
     Send,
     *CONTROL_TOOLS,
 )
