@@ -28,8 +28,7 @@ bench/results/
 # ── Playwright ──
 playwright-report/
 test-results/
-
-#interview_prep.md
+prep.md
 
 # ── OS / IDE ──
 .DS_Store

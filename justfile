@@ -46,6 +46,17 @@ test-py:
 test-js:
     pnpm -r test
 
+# The browser-marked suite: the real surface methods, against real Chrome, over synthetic
+# DOM that reproduces Gmail's structure. Slow (minutes) and excluded from `test` for that
+# reason -- but it is the only place selector logic is proved rather than re-asserted.
+test-browser:
+    uv run --project backend pytest -q backend/tests -m browser
+
+# Golden-task table: success rate, steps, tokens, typed termination, gate bypasses.
+# Exits 1 on any failure or any bypassed approval, so it works as a gate in a script.
+eval:
+    uv run --project backend python -m tests.bench.run
+
 lint:
     uv run --project backend ruff check backend packages/contracts scripts
 
