@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from inbox_contracts import ActionCall, Observation
 
@@ -199,4 +200,61 @@ def stuck_nudge(count: int) -> str:
         "Do NOT repeat the same action. Scroll to reveal off-screen content, WaitFor(2) if "
         "it may still be loading, or pick a DIFFERENT element. If you genuinely cannot "
         "proceed, call Complete(success=false)."
+    )
+
+
+#: Words a model uses when it has decided the task is finished.
+#:
+#: Narrow on purpose: these are read out of the model's OWN reasoning, and a false positive
+#: tells it to Complete a task it has not done. "task is complete" and "we are already
+#: there" are conclusions; "the compose window is complete" is not the shape being matched,
+#: because every pattern is anchored to a judgement about the task or the work.
+_CONCLUDED = re.compile(
+    r"\btask (?:is |seems |appears )?(?:already )?(?:complete|completed|done|finished)\b"
+    r"|\balready (?:there|open|done|complete)\b"
+    r"|\bconsider (?:the )?task done\b"
+    r"|\bnothing (?:more|further|else) to do\b"
+    r"|\bno further action\b"
+    # "complete" only where it NAMES THE VERB. "I will complete the subject field next" is a
+    # plan, not a conclusion, and treating it as one would end a run that had barely
+    # started — the exact false positive this guard must not make.
+    r"|\bcall complete\b"
+    r"|\bcomplete\s*\("
+    r"|\bcomplete success\b"
+    # "Need to respond with Complete. Provide success." — observed, and it matched none of
+    # the above, so that turn got the generic nudge instead of the one naming the verb.
+    r"|\brespond with complete\b"
+    r"|\bcomplete with success\b"
+    r"|\bprovide success\b",
+    re.IGNORECASE,
+)
+
+
+def has_concluded(reasoning: str) -> bool:
+    """Did the model just say, in words, that it is finished?"""
+    return bool(_CONCLUDED.search(reasoning or ""))
+
+
+def no_tool_call_nudge(reasoning: str) -> str:
+    """What to say when a turn produced reasoning and no action.
+
+    **Three separate bugs have now ended this way**, and in each the model reached the right
+    answer and then described it instead of doing it: `AskUser` was recommended and not
+    handled; "propose sending again" was read as *say* something; and a run that had opened
+    the requested mail concluded *"we can consider task done... so we can Complete success"*
+    and emitted nothing. The run died `NO_ACTION` with the task finished.
+
+    A generic "you did not call a tool" answers none of those, because the model does not
+    believe it failed to decide — it believes it decided and said so. Naming the verb its own
+    words imply closes the gap that the prompt rule did not.
+    """
+    if has_concluded(reasoning):
+        return (
+            "You said the task is finished, but saying it does not end the run — only the "
+            "tool does. Call Complete(success=true, reason=...) now, with what you found in "
+            "the reason. If it is NOT actually finished, call the tool that finishes it."
+        )
+    return (
+        "You did not call a tool, and reasoning alone changes nothing. Call exactly one "
+        "tool now — or Complete(success, reason) if the task is done or you are blocked."
     )

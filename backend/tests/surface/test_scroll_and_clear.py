@@ -404,3 +404,106 @@ async def test_the_page_referents_are_dropped_even_when_closing_failed(page):
     assert surface._geometry == {}
     assert surface._approved == set(), "an approval outlived its run"
     assert surface._last_observation is None
+
+
+# ── Click says whether the page reacted ─────────────────────────────────────
+#
+# `Click` returned "clicked [36]" whether or not anything happened. Told to open a sent
+# mail, the agent opened it, then clicked its subject heading twice — headings are not
+# clickable, nothing moved, and both came back as successes. With positive confirmation for
+# a no-op it had no reason to stop, and each click collapsed the message it had just opened.
+#
+# Unlike Scroll, a no-op click is NOT a failure: focusing a field, dismissing something
+# already dismissed, and a menu that renders late are all legitimate clicks that move
+# nothing. Failing those would break working flows to fix a reporting problem. The click
+# happened; whether the page answered is reported as the separate fact it is.
+
+
+def _click(index: int, point=(10.0, 10.0)):
+    from inbox_contracts import ActionCall
+
+    from app.surface.dispatch import ResolvedAction
+
+    return ResolvedAction(call=ActionCall(name="Click", args={"index": index}), point=point)
+
+
+async def test_a_click_that_changes_the_page_reports_plainly(page):
+    await page.set_content(
+        "<body><button style='position:absolute;left:0;top:0;width:80px;height:40px' "
+        "onclick=\"document.body.insertAdjacentHTML('beforeend','<p>opened</p>')\">Go</button></body>"
+    )
+
+    result = await _surface(page)._do_click(_click(3, (40.0, 20.0)))
+
+    assert result.success is True
+    assert "nothing on the page changed" not in result.reason
+
+
+async def test_a_click_that_does_nothing_says_so(page):
+    """THE regression: a heading is not clickable, and it used to report success anyway."""
+    await page.set_content(
+        "<body><h2 style='position:absolute;left:0;top:0;width:200px;height:40px'>"
+        "Evening Motivation</h2></body>"
+    )
+
+    result = await _surface(page)._do_click(_click(36, (100.0, 20.0)))
+
+    assert result.success is True, "a click that happened is not a failed action"
+    assert "nothing on the page changed" in result.reason
+
+
+async def test_the_no_op_message_tells_it_not_to_try_again(page):
+    """Without that, a "nothing happened" reads as "try harder" — which is how two clicks
+    became four."""
+    await page.set_content("<body><h2 style='width:200px;height:40px'>A heading</h2></body>")
+
+    result = await _surface(page)._do_click(_click(36, (100.0, 20.0)))
+
+    assert "Do not click it again" in result.reason
+    assert "call Complete" in result.reason
+
+
+async def test_a_no_op_click_is_never_a_FAILURE(page):
+    """Focusing a field changes nothing observable and is a perfectly good click. Failing it
+    would break every flow that clicks before typing."""
+    await page.set_content(
+        "<body><input style='position:absolute;left:0;top:0;width:200px;height:30px'></body>"
+    )
+
+    result = await _surface(page)._do_click(_click(5, (100.0, 15.0)))
+
+    assert result.success is True
+    assert result.error_code is None
+
+
+async def test_a_click_with_no_index_is_still_refused(page):
+    await page.set_content("<body><p>nothing</p></body>")
+
+    result = await _surface(page)._do_click(_click(1, None))
+
+    assert result.success is False
+    assert "needs an index" in result.reason
+
+
+async def test_an_unreadable_page_is_never_called_a_no_op(page):
+    """`None` means "could not tell". Reporting a real click as one that did nothing is the
+    mirror-image bug, and it would make the agent abandon actions that worked."""
+    await page.set_content("<body><h2 style='width:200px;height:40px'>A heading</h2></body>")
+    surface = _surface(page)
+    surface._page_signature = lambda: _none()
+
+    result = await surface._do_click(_click(36, (100.0, 20.0)))
+
+    assert "nothing on the page changed" not in result.reason
+
+
+async def test_navigation_counts_as_a_change(page):
+    """The signature includes the URL, so a click that navigates is never a no-op — even if
+    the new page happens to have a similar element count."""
+    await page.set_content("<body><h2>x</h2></body>")
+    surface = _surface(page)
+    before = await surface._page_signature()
+    await page.set_content("<body><h2>x</h2></body>")
+    await page.evaluate("() => history.pushState({}, '', '#thread')")
+
+    assert await surface._page_signature() != before

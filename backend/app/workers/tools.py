@@ -80,6 +80,16 @@ class Clear(BaseModel):
     index: int
 
 
+class Replace(BaseModel):
+    """Overwrite a field: clears it and types the new text, in ONE action.
+
+    Prefer this over Clear-then-Type whenever a field already holds text.
+    """
+
+    index: int
+    text: str = Field(description="The complete new contents of the field")
+
+
 class PressKey(BaseModel):
     """Press a single key, e.g. 'Enter' to submit."""
 
@@ -231,6 +241,11 @@ COMPOSE_TOOLS: tuple[type[BaseModel], ...] = (
     Click,
     Type,
     Clear,
+    # Overwriting a field is ONE act, and the loop takes one tool per turn. Told to "Clear
+    # it, then Type", the model spent whole turns reasoning about whether two calls broke
+    # that rule, lost track of what it had already done, and re-cleared text it had just
+    # written correctly. A verb that matches the intent removes the question.
+    Replace,
     PressKey,
     # `DraftReply` is deliberately NOT here. The class is defined, and no surface implements
     # it — there is no `_do_draftreply` anywhere. Offering it meant the model could pick a

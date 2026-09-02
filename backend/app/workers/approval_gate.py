@@ -274,7 +274,10 @@ def _draft_lines(state: AgentState, before: Draft | None, after: Draft) -> list[
         index = where.get(field)
         at = f" [{index}]" if index is not None else ""
         lines.append(
-            f"  - {field.capitalize()}{at}: Clear it, then Type EXACTLY the text between "
+            # ONE verb, because the loop takes one tool call per turn. "Clear it, then Type"
+            # is two, and the model spent whole turns deciding whether obeying it broke that
+            # rule — then re-cleared a body it had already written correctly.
+            f"  - {field.capitalize()}{at}: call Replace with EXACTLY the text between "
             f"the markers below — not the markers themselves.\n"
             f"--- begin {field} ---\n"
             f"{values[field]}\n"
@@ -346,7 +349,7 @@ def _correction_message(
         + "\n".join(blocks)
         + "\n"
         + " ".join(trailers)
-        + " Then propose sending again."
+        + " Then call Send again — that is what re-opens the approval card."
     )
 
 
@@ -559,7 +562,7 @@ def build_approval_gate_node(
                     note = (
                         f'The human asked a question rather than requesting a change: '
                         f'"{instruction}". Answer it with AskUser. Do NOT change the '
-                        "draft. Then propose sending again."
+                        "draft. Then call Send again — that is what re-opens the approval card."
                     )
 
             if note and not (new_recipient or revised is not None):
@@ -620,7 +623,7 @@ def build_approval_gate_node(
                     content=(
                         f"Do not send yet. Change it: {instruction}\n"
                         "Change ONLY what was asked; leave every other word exactly as it "
-                        "is. Then propose sending again."
+                        "is. Then call Send again — that is what re-opens the approval card."
                     ),
                 )
             ]

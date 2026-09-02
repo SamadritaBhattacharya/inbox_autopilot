@@ -77,6 +77,7 @@ SURFACE_VERBS: frozenset[str] = frozenset(
         # composing
         "Type",
         "Clear",
+        "Replace",
         "PressKey",
         # triage
         "Archive",
@@ -103,6 +104,9 @@ TIMEOUTS: dict[str, float] = {
     "ReadThread": 10.0,
     "Type": 10.0,
     "Clear": 5.0,
+    # Clear plus Type in one dispatch, so it needs both budgets — and Type's is scaled by
+    # payload, which a body legitimately makes large.
+    "Replace": 15.0,
     "PressKey": 5.0,
     "Scroll": 5.0,
     "Archive": 10.0,
@@ -141,7 +145,10 @@ TYPE_TIMEOUT_MAX = 60.0
 def timeout_for(call: ActionCall) -> float:
     """This call's wall, scaled by what it actually has to do."""
     base = TIMEOUTS.get(call.name, DEFAULT_TIMEOUT)
-    if call.name != "Type":
+    # `Replace` is a Clear plus a Type, so it inherits the payload-scaled wall. A flat
+    # deadline on an action whose duration is LINEAR in its text is not a tuning mistake, it
+    # is the wrong model — and it fails on exactly the long bodies the writer produces.
+    if call.name not in ("Type", "Replace"):
         return base
     text = str(call.args.get("text") or call.args.get("recipient") or "")
     if len(text) <= TYPE_KEYSTROKE_LIMIT:
@@ -239,6 +246,23 @@ def _state_changes(before: Observation | None, after: Observation) -> str:
         changes.append("the compose window closed")
     elif not was.compose_open and now.compose_open:
         changes.append("a compose window opened")
+
+    # ── opening a thread ──
+    #
+    # **The transition this narration was missing, and it is half the app.** Told to open a
+    # sent mail, the agent clicked the right row, the thread opened — 162 elements and "431
+    # more below" collapsed to 71 and "2 more below" — and nothing said so. `mail.view` is
+    # still `sent`: a thread inside Sent is Sent. Compose never opened. So every rule above
+    # returned nothing, and the agent went on clicking at a task it had already finished,
+    # collapsing the message it had just opened.
+    #
+    # `thread_token` was computed on every observation from the first milestone and read by
+    # nothing. It goes from `None` to a value the instant a thread opens, which is exactly
+    # the "you did it" signal that did not exist.
+    if not was.thread_token and now.thread_token:
+        changes.append("a thread is now open — you are reading one message, not the list")
+    elif was.thread_token and not now.thread_token:
+        changes.append("the thread closed — you are back in the message list")
 
     if was.view != now.view:
         changes.append(f"the view changed from {was.view} to {now.view}")
@@ -778,14 +802,60 @@ class PlaywrightEmailSurface:
         )
 
     async def _do_click(self, action: ResolvedAction) -> ActionResult:
+        """Click, and say whether the page reacted.
+
+        **A click that hits nothing used to report `clicked [36]` — the same words as one
+        that worked.** Told to open a sent mail, the agent opened it, then clicked its
+        subject heading twice. Headings are not clickable, so nothing happened; both came
+        back as successes. With positive confirmation for a no-op it had no reason to stop,
+        and each click collapsed the message it had just opened.
+
+        Unlike `Scroll`, a click that changes nothing is NOT made a failure. Plenty of real
+        clicks legitimately move nothing observable — focusing a field, dismissing something
+        already dismissed, a menu that renders after the settle. Failing those would break
+        working flows to fix a reporting problem. The click genuinely happened; whether the
+        page answered is a second fact, and it is reported as one.
+        """
         if action.point is None:
             return ActionResult(success=False, reason="Click needs an index")
         x, y = action.point
+        index = action.call.args.get("index")
+
+        before = await self._page_signature()
         # Move first: hover state is real, and handlers bound to pointerenter will not fire
         # for a click that teleports.
         await self._page.mouse.move(x, y)
         await self._page.mouse.click(x, y)
-        return ActionResult(success=True, reason=f"clicked [{action.call.args.get('index')}]")
+        await asyncio.sleep(SETTLE_MIN)
+        after = await self._page_signature()
+
+        if before is not None and after is not None and before == after:
+            return ActionResult(
+                success=True,
+                reason=(
+                    f"clicked [{index}], but nothing on the page changed — it may not be "
+                    "clickable. Do not click it again; try a different element, or if the "
+                    "task is already done, call Complete."
+                ),
+            )
+        return ActionResult(success=True, reason=f"clicked [{index}]")
+
+    async def _page_signature(self) -> str | None:
+        """A cheap fingerprint of what is on screen, for "did that do anything?".
+
+        Counts and titles rather than the full DOM: this runs on every click, and the
+        question is only "did anything change", never "what changed". `None` when the page
+        cannot be read — an unreadable page is not an unchanged one, and reporting one as
+        the other is how a real click gets called a no-op.
+        """
+        try:
+            return await self._page.evaluate(
+                "() => `${document.title}|${location.href}|"
+                "${document.querySelectorAll('*').length}|"
+                "${(document.body && document.body.innerText || '').length}`"
+            )
+        except Exception:
+            return None
 
     async def _already_addressed(self) -> set[str]:
         """Addresses already in the To field, lowercased. Empty when it cannot be read.
@@ -850,6 +920,28 @@ class PlaywrightEmailSurface:
                 continue
         logger.debug("could not focus the %s field by any known selector", field)
         return False
+
+    async def _do_replace(self, action: ResolvedAction) -> ActionResult:
+        """Overwrite a field: clear it and type the new text, as ONE action.
+
+        **This exists because "Clear it, then Type" is two verbs and the loop takes one per
+        turn.** Handed that instruction, the model spent most of its reasoning budget on the
+        conflict — *"That's two calls in same turn, which violates rule 'Call exactly one
+        tool per turn'... we need to redo"* — lost track of which half it had already done,
+        and re-cleared a body it had just written correctly. Three times, on one edit.
+
+        The verb matches the intent, so there is nothing left to interpret. It also removes
+        the turn-long window where the field is empty: if a run dies between a Clear and a
+        Type, the human's draft is gone. Here the gap is one dispatch, and the agent cannot
+        be interrupted inside it.
+
+        Clearing runs FIRST and by itself, so a field that cannot be emptied is reported as
+        such instead of being typed into on top of its old contents.
+        """
+        cleared = await self._do_clear(action)
+        if not cleared.success:
+            return cleared
+        return await self._do_type(action)
 
     async def _do_type(self, action: ResolvedAction) -> ActionResult:
         text = self._text_for(action)
@@ -1336,9 +1428,32 @@ class PlaywrightEmailSurface:
         if field == "to":
             return await self._clear_recipients()
 
-        if action.point is not None:
-            x, y = action.point
-            await self._page.mouse.click(x, y)
+        # A known field is reached by SELECTOR, exactly as `_do_type` reaches it.
+        #
+        # This used to focus by coordinate alone, and `Ctrl+A` selects whatever happens to
+        # have focus — so a clear that could not find a caret quietly selected nothing,
+        # deleted nothing, and reported success. The next Type then appended to the text it
+        # was supposed to replace ("Friday demo — movedOld subject"). It is the same
+        # coordinate-versus-selector failure `_focus_field` was written for: a captured
+        # position is a bet that the page has not reflowed since.
+        #
+        # The coordinate stays as the fallback for anything that is not a named compose
+        # field, where a selector is not available and a click is all there is.
+        focused = await self._focus_field(field) if field else False
+        if not focused:
+            if field:
+                return ActionResult(
+                    success=False,
+                    reason=(
+                        f"could not reach the {field} field — nothing was cleared. "
+                        "Re-observe and try the field from the element list."
+                    ),
+                    error_code="FIELD_UNREACHABLE",
+                )
+            if action.point is not None:
+                x, y = action.point
+                await self._page.mouse.click(x, y)
+
         await self._page.keyboard.press("Control+A")
         await self._page.keyboard.press("Delete")
         return ActionResult(success=True, reason="cleared the field")

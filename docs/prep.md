@@ -1036,3 +1036,35 @@ A running list of the concrete problems hit while building this, and the fix for
 - Asked to fix a duplicated greeting, the model returned an email with the greeting deleted and the sign-off reworded. You then had to re-read the whole thing to find an edit you never asked for.
 - **Fix:** when you retype text yourself, it's applied exactly as typed, with no model call. A model only gets involved if you ask for something in words.
 - I also show a diff of what changed since the last version, so you don't re-read the whole email.
+
+
+
+
+## 23. What a WebSocket is
+
+* A regular web request (HTTP) is like sending a letter and getting one reply back — connection closes after.
+* A WebSocket is a phone call — one connection stays open, and  **either side can talk anytime** , not just request→response.
+* That's why it's used for anything "live" — chat apps, stock tickers, multiplayer games.
+
+## Why this project needs one
+
+* The agent runs for many turns (observe → reason → act, over and over), and you want to **watch it happen live** — not refresh a page to check status.
+* The right pane shows the live browser screenshot, the left pane shows reasoning/actions as they happen — all of that is the backend *pushing* events to you, which plain HTTP can't do well.
+
+## How it's used here (from [ws.py](vscode-webview://0nkufe7j6an5u0fsgt558jejobvdn83d418e0vh5543qggkl2kek/backend/app/api/ws.py))
+
+* **One socket = one cockpit tab watching.** You send `{"type": "start", "task": "..."}` and the backend starts the agent graph and streams events back: `reasoning`, `action`, `screenshot`, `question`, `status`, etc.
+* **The run and the socket are separate things, on purpose.** The agent run lives in a `RunManager`, not inside the socket handler. If you close your laptop mid-run, the run keeps going — you just stop watching it.
+* **Reconnect and pick up where you left off.** Send `{"type": "attach", "threadId": "..."}` and you reattach to an in-progress run — including replaying anything you missed, because events go through a buffer first, not straight to the socket.
+* **It's also how you talk back to the agent** , not just watch it:
+* `answer` — reply to a question it asked (missing context)
+* `decision` — approve/reject/edit a Send (the approval gate)
+* `choice` — pick a recovery option when it's stuck
+* `feedback` — correct it mid-run ("no, not that one")
+* `stop` — kill the run
+* **Interrupts are the clever part.** When the agent needs a human (approval, missing info), the graph literally pauses and checkpoints itself — it's not sitting in memory waiting. So you could disconnect during a pending approval, come back ten minutes later, reattach, and the question is still sitting there waiting for your answer.
+
+## One-liner if asked in interview
+
+> "WebSocket because the relationship is long-lived and bidirectional — the agent streams reasoning/screenshots to me continuously, and I can push approvals/corrections back mid-run. The run itself is checkpointed separately from the socket connection, so closing the tab doesn't kill the run — reconnecting just re-subscribes to a run that was never waiting on me in the first place."
+>

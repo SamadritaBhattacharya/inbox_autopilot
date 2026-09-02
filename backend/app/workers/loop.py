@@ -34,6 +34,7 @@ from app.agent.guards import (
     clip_reasoning,
     is_oscillating,
     is_repetition_candidate,
+    no_tool_call_nudge,
     oscillation_nudge,
     page_signature,
     push_action,
@@ -356,11 +357,21 @@ def build_reason_node(
                 return {
                     "messages": [
                         Message(role="assistant", content=explanation),
-                        Message(
-                            role="user",
-                            content="You did not call a tool. Call one, or Complete().",
-                        ),
+                        Message(role="user", content=no_tool_call_nudge(explanation)),
                     ],
+                    # **The field `route_after_reason` checks, and the only path that used
+                    # to leave it stale.** Its guard reads "a turn with no `last_action` is
+                    # the nudge path… sending it to `act` would dispatch whatever action the
+                    # PREVIOUS turn chose" — and nothing ever cleared it, so the guard could
+                    # not fire and the router sent this turn to `act` anyway.
+                    #
+                    # Observed live: asked to open the Sent folder, the agent opened it, then
+                    # produced prose instead of `Complete`. The stale `Click(index=57)` was
+                    # re-dispatched — but Sent had loaded and the indices had been rebuilt,
+                    # so 57 was now a checkbox, and it silently selected an unrelated email.
+                    # It also burned the single retry, so the next empty turn died NO_ACTION
+                    # with the task already done.
+                    "last_action": None,
                     "nudge_count": state.nudge_count + 1,
                     "step": state.step + 1,
                 }

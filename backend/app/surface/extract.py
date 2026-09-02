@@ -141,9 +141,28 @@ EXTRACT_JS = """
   const ids = new Map();
   let nextId = 1;
 
+  // The compose body, if one is open. Its CONTENTS are content, never controls.
+  //
+  // Gmail wraps every line you type in its own <div>, so a five-line email becomes five
+  // more elements in the list the moment the agent writes it. Observed live: the agent
+  // typed the body successfully, saw "[76] I hope your day..., [83] Wishing you..., [89]
+  // Regards,, [93] Sam" appear where one body field had been, concluded the field had
+  // "split into multiple textboxes", and cleared and retyped it. Twice. Each successful
+  // write looked exactly like a failure, so it kept undoing its own work.
+  //
+  // Nothing inside the body is separately actionable — you type into the body, never into
+  // line three — and `MailContext.body_index` already promises the body is ONE element.
+  // Dropping the descendants keeps that promise and stops the write from looking undone.
+  const bodyRoot =
+    document.querySelector('[role="dialog"] [g_editable="true"]') ||
+    document.querySelector(
+      '[role="dialog"] [contenteditable="true"]:not([role="combobox"])'
+    );
+
   for (const el of all) {
     if (out.length >= maxNodes) break;
     if (SKIP.has(el.tagName)) continue;
+    if (bodyRoot && el !== bodyRoot && bodyRoot.contains(el)) continue;
 
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();

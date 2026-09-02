@@ -88,7 +88,40 @@ def test_the_instruction_names_the_field_and_its_index():
     text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, after)
 
     assert "Body [70]" in text
-    assert "Clear it" in text
+
+
+def test_the_instruction_asks_for_ONE_verb():
+    """**Reversed deliberately: this used to require "Clear it".**
+
+    "Clear it, then Type" is two verbs, and the worker prompt says *call exactly one tool
+    per turn*. Handed both, the model spent whole turns reasoning about the conflict — "that
+    is two calls in same turn, which violates rule... we need to redo" — lost track of which
+    half it had done, and re-cleared a body it had just written correctly. Three times, on
+    one edit.
+
+    `Replace` is that intent as a single action, so there is nothing left to interpret.
+    """
+    after = Draft(subject="Good Evening", body="Old body. best wishes")
+    text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, after)
+
+    assert "call Replace" in text
+    assert "Clear it, then Type" not in text
+
+
+def test_the_ending_names_a_verb_rather_than_asking_for_a_proposal():
+    """**The bug that killed a run outright.** It used to end "Then propose sending again",
+    and the model read "propose" as *say* something: "That is not a tool; it's a textual
+    response." It emitted no tool call, the loop got nothing to dispatch, and the run died
+    NO_ACTION before the human ever saw the approval card.
+
+    Send IS the proposal — calling it is what opens the gate. Never end an instruction with
+    a word the model can satisfy by talking.
+    """
+    after = Draft(subject="Good Evening", body="Old body. best wishes")
+    text = _apply_revision(_state(subjectIndex=61, bodyIndex=70), BEFORE, after)
+
+    assert "call Send again" in text
+    assert "propose sending" not in text
 
 
 def test_the_instruction_does_not_mention_fields_that_did_not_change():
